@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
-	"errors"
 	"fmt"
 	"gotorrent/internal/p2p"
 	"gotorrent/internal/peers"
+	"gotorrent/internal/util"
 	"os"
 	"path/filepath"
 
@@ -76,14 +76,14 @@ func (t *TorrentInfo) DownloadToFile(path string) error {
 	}
 	peers := []peers.Peer{}
 	if len(t.AnnounceList) == 0 {
-		peers, err = t.requestPeersUDP(t.Announce, peerID, Port)
+		peers, err = t.requestPeers(t.Announce, peerID, Port)
 		if err != nil {
 			return err
 		}
 	} else {
 		for _, announce := range t.AnnounceList {
 			fmt.Printf("Connecting to %s\n", announce[0])
-			newPeers, err := t.requestPeersUDP(announce[0], peerID, Port)
+			newPeers, err := t.requestPeers(announce[0], peerID, Port)
 			if err != nil {
 				fmt.Println(err)
 				continue
@@ -114,43 +114,58 @@ func (t *TorrentInfo) DownloadToFile(path string) error {
 	}
 
 	if len(t.Files) > 0 {
-		bytesWritten := 0
-		for _, file := range t.Files {
-			filePath := filepath.Join(file.Path...)
-			d, f := filepath.Split(filePath)
-			dir := filepath.Join(path, d)
-			fullPath := filepath.Join(dir, f)
-			_, err := os.Stat(dir)
-			if err != nil {
-				if errors.Is(err, os.ErrNotExist) { // directory doesn't exist
-					err := os.Mkdir(dir, 0755)
-					if err != nil {
-						return err
-					}
-				}
-			}
-
-			outFile, err := os.Create(fullPath)
-			if err != nil {
-				return err
-			}
-			defer outFile.Close()
-			_, err = outFile.Write(buf[bytesWritten : bytesWritten+file.Length])
-			if err != nil {
-				return err
-			}
-			bytesWritten += file.Length
+		err = t.saveMultiFile(path, buf)
+		if err != nil {
+			return err
 		}
 	} else {
-		outFile, err := os.Create(path + torrent.Name)
+		err = t.saveSingleFile(path, buf)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *TorrentInfo) saveMultiFile(path string, buf []byte) error {
+	bytesWritten := 0
+	for _, file := range t.Files {
+		filePath := filepath.Join(file.Path...)
+		d, f := filepath.Split(filePath)
+		dir := filepath.Join(path, t.Name, d)
+		fullPath := filepath.Join(dir, f)
+
+		if !util.DirExists(dir) {
+			util.MakeDir(dir)
+		}
+
+		outFile, err := os.Create(fullPath)
 		if err != nil {
 			return err
 		}
 		defer outFile.Close()
-		_, err = outFile.Write(buf)
+		_, err = outFile.Write(buf[bytesWritten : bytesWritten+file.Length])
 		if err != nil {
 			return err
 		}
+		bytesWritten += file.Length
+	}
+	return nil
+}
+
+func (t *TorrentInfo) saveSingleFile(path string, buf []byte) error {
+	if !util.DirExists(path) {
+		util.MakeDir(path)
+	}
+
+	outFile, err := os.Create(path + t.Name)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	_, err = outFile.Write(buf)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -195,7 +210,6 @@ func (i *bencodeInfoMulti) hash() ([20]byte, error) {
 
 	h := sha1.Sum(buf.Bytes())
 
-	fmt.Printf("%x\n", h)
 	return h, nil
 }
 

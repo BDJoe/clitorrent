@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	torrentFile "gotorrent/internal/torrentfile"
 	"log"
 	"os"
@@ -19,4 +20,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	fmt.Println("Download Complete!")
 }

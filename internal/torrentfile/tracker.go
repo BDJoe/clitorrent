@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackpal/bencode-go"
@@ -65,6 +64,31 @@ func (t *TorrentInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 }
 
 func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
+	url, err := url.Parse(announce)
+	if err != nil {
+		return nil, err
+	}
+	peers := []peers.Peer{}
+
+	switch url.Scheme {
+	case "http":
+		peers, err = t.requestPeersHTML(announce, peerID, port)
+		if err != nil {
+			return nil, err
+		}
+	case "udp":
+		peers, err = t.requestPeersUDP(announce, peerID, port)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("Invalid Announce Scheme")
+	}
+
+	return peers, nil
+}
+
+func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
 	url, err := t.buildTrackerURL(announce, peerID, port)
 	if err != nil {
 		return nil, err
@@ -88,17 +112,13 @@ func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16
 }
 
 func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
-	address := strings.Replace(announce, "udp://", "", -1)
-	address = strings.Replace(address, "/announce", "", -1)
-	// if !ok {
-	// 	return nil, fmt.Errorf("Not a valid udp address")
-	// }
-	// address, ok = strings.CutSuffix(announce, "/")
-	// if !ok {
-	// 	return nil, fmt.Errorf("Not a valid udp address")
-	// }
+	address, err := url.Parse(announce)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Println(address.Host, address.Scheme)
 
-	udpAddr, err := net.ResolveUDPAddr("udp", address)
+	udpAddr, err := net.ResolveUDPAddr("udp", address.Host)
 	if err != nil {
 		return nil, err
 	}
