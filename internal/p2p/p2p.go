@@ -202,13 +202,18 @@ func (t *Torrent) Download() ([]byte, error) {
 		begin, end := t.calculateBoundsForPiece(res.index)
 		copy(buf[begin:end], res.buf)
 		donePieces++
-		printPercentage(donePieces, len(t.PieceHashes))
+		SetCompletePercentage(donePieces, len(t.PieceHashes))
 	}
 	close(workQueue)
 	return buf, nil
 }
 
-func printPercentage(done int, total int) {
-	complete := float64(done) / float64(total) * 100
-	fmt.Printf("Progress: %.2f%%\r", complete)
+var completePercentage float64
+
+func SetCompletePercentage(done int, total int) {
+	completePercentage = float64(done) / float64(total) * 100
+}
+
+func GetCompletePercentage() float64 {
+	return completePercentage
 }
