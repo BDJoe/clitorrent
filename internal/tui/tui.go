@@ -27,6 +27,10 @@ type model struct {
 	err          error
 }
 
+type progressMsg struct {
+	progress float64
+}
+
 var (
 	focusedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	blurredStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -73,9 +77,8 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case TickMsg:
-		m.percentage = p2p.GetCompletePercentage()
-		return m, doTick()
+	case progressMsg:
+		m.percentage = msg.progress
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -114,6 +117,18 @@ func (m model) View() tea.View {
 
 func Run() error {
 	p := tea.NewProgram(initModel())
+
+	go func() {
+		for {
+			pause := time.Duration(250) * time.Millisecond // nolint:gosec
+			time.Sleep(pause)
+
+			// Send the Bubble Tea program a message from outside the
+			// tea.Program. This will block until it is ready to receive
+			// messages.
+			p.Send(progressMsg{progress: p2p.GetCompletePercentage()})
+		}
+	}()
 	if _, err := p.Run(); err != nil {
 		return err
 	}
@@ -248,10 +263,6 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 func progressView(m model) string {
 	s := fmt.Sprintf("Complete: %02f", m.percentage)
 	return s
-}
-
-func progressUpdate(m model) {
-	m.percentage = p2p.GetCompletePercentage()
 }
 
 func downloadFile(m model) tea.Msg {

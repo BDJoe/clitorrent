@@ -203,6 +203,7 @@ func (t *Torrent) Download() ([]byte, error) {
 		copy(buf[begin:end], res.buf)
 		donePieces++
 		SetCompletePercentage(donePieces, len(t.PieceHashes))
+		fmt.Print(completePercentage)
 	}
 	close(workQueue)
 	return buf, nil
