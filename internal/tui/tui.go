@@ -3,8 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"gotorrent/internal/p2p"
 	torrentFile "gotorrent/internal/torrentfile"
+	"gotorrent/internal/util"
 	"os"
 	"strings"
 	"time"
@@ -21,15 +21,20 @@ type model struct {
 	filePath     textinput.Model
 	filePicker   filepicker.Model
 	selectedFile string
-	isPicker     bool
-	isDownload   bool
+	state        uiState
 	percentage   float64
+	message      string
+	program      *tea.Program
 	err          error
 }
 
-type progressMsg struct {
-	progress float64
-}
+type uiState int
+
+const (
+	Main     uiState = 0
+	Picker   uiState = 1
+	Download uiState = 2
+)
 
 var (
 	focusedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -47,15 +52,15 @@ func clearErrorAfter(t time.Duration) tea.Cmd {
 	})
 }
 
-type TickMsg time.Time
+// type TickMsg time.Time
 
-func doTick() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
-		return TickMsg(t)
-	})
-}
+// func doTick() tea.Cmd {
+// 	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+// 		return TickMsg(t)
+// 	})
+// }
 
-func initModel() model {
+func InitModel() model {
 	path := textinput.New()
 	path.SetVirtualCursor(false)
 	path.Focus()
@@ -68,17 +73,24 @@ func initModel() model {
 	picker.CurrentDirectory = p
 	picker.AutoHeight = true
 
-	return model{choices: []string{"path", "file", "start"}, chosenIndex: 0, filePath: path, filePicker: picker, isPicker: false}
+	return model{choices: []string{"path", "file", "start"}, chosenIndex: 0, filePath: path, filePicker: picker, state: uiState(Main)}
 }
 
 func (m model) Init() tea.Cmd {
-	return m.filePicker.Init()
+	return tea.Batch(m.filePicker.Init()) //, doTick())
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case progressMsg:
-		m.percentage = msg.progress
+	// case util.ProgressMsg:
+	// 	m.percentage = msg.Progress
+	// 	m.message = msg.Message
+	// 	return m, nil
+	// case TickMsg:
+	// 	perc, mess := getProgress(m)
+	// 	m.percentage = perc
+	// 	m.message = mess
+	// 	return m, doTick()
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
@@ -87,8 +99,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.isPicker {
+	switch m.state {
+	case Picker:
 		return pickerUpdate(m, msg)
+	case Download:
+		return progressUpdate(m, msg)
 	}
 
 	return mainUpdate(m, msg)
@@ -96,13 +111,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() tea.View {
 	var s string
-	if m.isPicker {
-		s = pickerView(m)
-	} else if m.isDownload {
-		s = progressView(m)
-	} else {
+	switch m.state {
+	case Main:
 		s = mainView(m)
+	case Picker:
+		s = pickerView(m)
+	case Download:
+		s = progressView(m)
 	}
+
 	view := tea.NewView(s)
 	view.AltScreen = true
 	var c *tea.Cursor
@@ -115,25 +132,20 @@ func (m model) View() tea.View {
 	return view
 }
 
-func Run() error {
-	p := tea.NewProgram(initModel())
+func Run() (*tea.Program, error) {
+	m := InitModel()
+	p := tea.NewProgram(&m)
+	m.program = p
 
-	go func() {
-		for {
-			pause := time.Duration(250) * time.Millisecond // nolint:gosec
-			time.Sleep(pause)
-
-			// Send the Bubble Tea program a message from outside the
-			// tea.Program. This will block until it is ready to receive
-			// messages.
-			p.Send(progressMsg{progress: p2p.GetCompletePercentage()})
-		}
-	}()
 	if _, err := p.Run(); err != nil {
-		return err
+		return p, err
 	}
-	return nil
+	return p, nil
 }
+
+// func getProgress(m model) (float64, string) {
+// 	return p2p.CompletePercentage, m.torrent.Message
+// }
 
 func pickerView(m model) string {
 	var s strings.Builder
@@ -155,7 +167,7 @@ func pickerUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "q" {
-			m.isPicker = false
+			m.state = Main
 			return m, cmd
 		}
 	case clearErrorMsg:
@@ -168,7 +180,7 @@ func pickerUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
 		// Get the path of the selected file.
 		m.selectedFile = path
-		m.isPicker = false
+		m.state = Main
 		return m, cmd
 	}
 
@@ -228,12 +240,12 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 				case "path":
 					m.chosenIndex++
 				case "file":
-					m.isPicker = true
+					m.state = Picker
 					return m, tea.Batch(m.filePicker.Init(), tea.RequestWindowSize)
 				case "start":
-					m.isPicker = false
-					m.isDownload = true
-					return m, doTick()
+					m.state = Download
+					cmd = func() tea.Msg { return downloadFile(m) }
+					return m, cmd
 				}
 			}
 			if s == "up" {
@@ -260,8 +272,24 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func progressUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case util.ProgressMsg:
+		if msg.Progress > 0 {
+			m.percentage = msg.Progress
+		}
+		if len(msg.Message) > 0 {
+			m.message = msg.Message
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func progressView(m model) string {
-	s := fmt.Sprintf("Complete: %02f", m.percentage)
+	// s := fmt.Sprintf("Complete: %02f\n", m.percentage)
+	// s += m.message
+	s := lipgloss.JoinVertical(lipgloss.Top, m.message, fmt.Sprintf("Complete: %%%.02f\n", m.percentage))
 	return s
 }
 
@@ -272,8 +300,9 @@ func downloadFile(m model) tea.Msg {
 	if err != nil {
 		return tea.Quit()
 	}
-
-	err = tf.DownloadToFile(outPath)
+	go func() {
+		err = tf.DownloadToFile(outPath, m.program)
+	}()
 	if err != nil {
 		return tea.Quit()
 	}

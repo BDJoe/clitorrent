@@ -116,7 +116,7 @@ func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(address.Host, address.Scheme)
+	//fmt.Println(address.Host, address.Scheme)
 
 	udpAddr, err := net.ResolveUDPAddr("udp", address.Host)
 	if err != nil {
@@ -131,7 +131,7 @@ func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("connection packet: % x\n", req)
+	//fmt.Printf("connection packet: % x\n", req)
 	_, err = conn.Write(req[:])
 	if err != nil {
 		return nil, err
@@ -145,11 +145,11 @@ func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 		return nil, err
 	}
 
-	action := binary.BigEndian.Uint32(buf)
+	_ = binary.BigEndian.Uint32(buf)
 	transId := binary.BigEndian.Uint32(buf[4:])
 	connId := binary.BigEndian.Uint64(buf[8:])
 
-	fmt.Printf("n: %v, action: % x, received tid: % x, conn Id: % x\n", n, action, transId, connId)
+	//fmt.Printf("n: %v, action: % x, received tid: % x, conn Id: % x\n", n, action, transId, connId)
 
 	r := AnnounceRequest{
 		InfoHash:      t.InfoHash,
@@ -172,7 +172,7 @@ func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Received %v bytes for announce\n", n)
+	//fmt.Printf("Received %v bytes for announce\n", n)
 	res, err := parseAnnounceResponse(newBuf, n)
 	if err != nil {
 		return nil, err
@@ -259,7 +259,7 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 		offset := 20 + 6*i
 		p[i].IP = net.IP(b[offset : offset+4])
 		p[i].Port = binary.BigEndian.Uint16(b[offset+4 : offset+6])
-		fmt.Println(p[i].IP)
+		//fmt.Println(p[i].IP)
 	}
 	rv.Peers = p
 	return rv, nil

@@ -7,8 +7,11 @@ import (
 	"gotorrent/internal/client"
 	"gotorrent/internal/message"
 	"gotorrent/internal/peers"
+	"gotorrent/internal/util"
 	"log"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // MaxBlockSize is the largest number of bytes a request can ask for
@@ -19,13 +22,15 @@ const MaxBackLog = 5
 
 // Torrent holds data required to download a torrent from a list of peers
 type Torrent struct {
-	Peers       []peers.Peer
-	PeerID      [20]byte
-	InfoHash    [20]byte
-	PieceHashes [][20]byte
-	PieceLength int
-	Length      int
-	Name        string
+	Peers           []peers.Peer
+	PeerID          [20]byte
+	InfoHash        [20]byte
+	PieceHashes     [][20]byte
+	PieceLength     int
+	Length          int
+	Name            string
+	Progress        float64
+	ProgressMessage string
 }
 
 type pieceWork struct {
@@ -130,11 +135,11 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 func (t *Torrent) startDownloadWorker(peer peers.Peer, workQueue chan *pieceWork, results chan *pieceResult) {
 	c, err := client.New(peer, t.PeerID, t.InfoHash)
 	if err != nil {
-		log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
+		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
 		return
 	}
 	defer c.Conn.Close()
-	log.Printf("Completed handshake with %s\n", peer.IP)
+	//log.Printf("Completed handshake with %s\n", peer.IP)
 
 	c.SendUnchoke()
 	c.SendInterested()
@@ -148,7 +153,7 @@ func (t *Torrent) startDownloadWorker(peer peers.Peer, workQueue chan *pieceWork
 		// Download the piece
 		buf, err := attemptDownloadPiece(c, pw)
 		if err != nil {
-			log.Println("Exiting", err)
+			//log.Println("Exiting", err)
 			workQueue <- pw
 			return
 		}
@@ -179,8 +184,8 @@ func (t *Torrent) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-func (t *Torrent) Download() ([]byte, error) {
-	log.Println("Starting download for", t.Name)
+func (t *Torrent) Download(program *tea.Program) ([]byte, error) {
+	program.Send(util.ProgressMsg{Message: fmt.Sprintf("Starting download for %s", t.Name)})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
@@ -202,19 +207,14 @@ func (t *Torrent) Download() ([]byte, error) {
 		begin, end := t.calculateBoundsForPiece(res.index)
 		copy(buf[begin:end], res.buf)
 		donePieces++
-		SetCompletePercentage(donePieces, len(t.PieceHashes))
-		fmt.Print(completePercentage)
+		program.Send(util.ProgressMsg{Progress: getCompletePercentage(donePieces, len(t.PieceHashes))})
 	}
 	close(workQueue)
 	return buf, nil
 }
 
-var completePercentage float64
+var CompletePercentage float64
 
-func SetCompletePercentage(done int, total int) {
-	completePercentage = float64(done) / float64(total) * 100
-}
-
-func GetCompletePercentage() float64 {
-	return completePercentage
+func getCompletePercentage(done int, total int) float64 {
+	return float64(done) / float64(total) * 100
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	tea "charm.land/bubbletea/v2"
 	bencode "github.com/jackpal/bencode-go"
 )
 
@@ -68,7 +69,8 @@ type bencodeTorrent struct {
 	Info         bencodeInfoBase `bencode:"info"`
 }
 
-func (t *TorrentInfo) DownloadToFile(path string) error {
+func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
+	program.Send(util.ProgressMsg{Progress: 0.0, Message: "Connecting to peers"})
 	var peerID [20]byte
 	_, err := rand.Read(peerID[:])
 	if err != nil {
@@ -82,21 +84,23 @@ func (t *TorrentInfo) DownloadToFile(path string) error {
 		}
 	} else {
 		for _, announce := range t.AnnounceList {
-			fmt.Printf("Connecting to %s\n", announce[0])
+			// program.Send(util.ProgressMsg{Progress: 0.0, Message: fmt.Sprintf("Connecting to %s\n", announce[0])})
+			//t.Message = fmt.Sprintf("Connecting to %s\n", announce[0])
 			newPeers, err := t.requestPeers(announce[0], peerID, Port)
 			if err != nil {
-				fmt.Println(err)
+				//fmt.Println(err)
 				continue
 			}
 			peers = append(peers, newPeers...)
-			fmt.Printf("Success! Got %d peers.", len(newPeers))
+			program.Send(util.ProgressMsg{Progress: 0.0, Message: fmt.Sprintf("Success! Got %d peers.", len(peers))})
+			//t.Message = fmt.Sprintf("Success! Got %d peers.", len(newPeers))
 		}
 	}
 
 	if len(peers) == 0 {
 		return fmt.Errorf("Failed to connect to trackers\n")
 	}
-
+	program.Send(util.ProgressMsg{Message: fmt.Sprintf("Connected to %d peers", len(peers))})
 	// TODO: Handle multifile torrents
 	torrent := p2p.Torrent{
 		Peers:       peers,
@@ -108,7 +112,7 @@ func (t *TorrentInfo) DownloadToFile(path string) error {
 		Name:        t.Name,
 	}
 
-	buf, err := torrent.Download()
+	buf, err := torrent.Download(program)
 	if err != nil {
 		return err
 	}
@@ -124,6 +128,7 @@ func (t *TorrentInfo) DownloadToFile(path string) error {
 			return err
 		}
 	}
+	program.Send(util.ProgressMsg{Message: "Download Complete!"})
 	return nil
 }
 
@@ -197,7 +202,7 @@ func (i *bencodeInfoSingle) hash() ([20]byte, error) {
 
 	h := sha1.Sum(buf.Bytes())
 
-	fmt.Printf("%x\n", h)
+	//fmt.Printf("%x\n", h)
 	return h, nil
 }
 

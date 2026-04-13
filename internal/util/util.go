@@ -5,6 +5,11 @@ import (
 	"os"
 )
 
+type ProgressMsg struct {
+	Progress float64
+	Message  string
+}
+
 func DirExists(dir string) bool {
 	_, err := os.Stat(dir)
 	if err == nil {
