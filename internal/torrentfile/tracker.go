@@ -94,7 +94,7 @@ func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 		return nil, err
 	}
 
-	c := &http.Client{Timeout: 15 * time.Second}
+	c := &http.Client{Timeout: 10 * time.Second}
 	resp, err := c.Get(url)
 	if err != nil {
 		return nil, err
@@ -165,7 +165,7 @@ func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 
 	_, err = conn.Write(a[:])
 
-	conn.SetDeadline(time.Now().Add(time.Second * 30))
+	conn.SetDeadline(time.Now().Add(time.Second * 10))
 
 	newBuf := make([]byte, 1024)
 	n, err = bufio.NewReader(conn).Read(newBuf)

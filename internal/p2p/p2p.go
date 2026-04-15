@@ -184,8 +184,8 @@ func (t *Torrent) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-func (t *Torrent) Download(program *tea.Program) ([]byte, error) {
-	program.Send(util.ProgressMsg{Message: fmt.Sprintf("Starting download for %s", t.Name)})
+func (t *Torrent) Download(program *tea.Program, id int) ([]byte, error) {
+	program.Send(util.ProgressMsg{TorrentId: id, Message: "Downloading"})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
@@ -207,7 +207,7 @@ func (t *Torrent) Download(program *tea.Program) ([]byte, error) {
 		begin, end := t.calculateBoundsForPiece(res.index)
 		copy(buf[begin:end], res.buf)
 		donePieces++
-		program.Send(util.ProgressMsg{Progress: getCompletePercentage(donePieces, len(t.PieceHashes))})
+		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(donePieces, len(t.PieceHashes))})
 	}
 	close(workQueue)
 	return buf, nil
@@ -216,5 +216,5 @@ func (t *Torrent) Download(program *tea.Program) ([]byte, error) {
 var CompletePercentage float64
 
 func getCompletePercentage(done int, total int) float64 {
-	return float64(done) / float64(total) * 100
+	return float64(done) / float64(total)
 }

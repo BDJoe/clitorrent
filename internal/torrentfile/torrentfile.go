@@ -69,13 +69,14 @@ type bencodeTorrent struct {
 	Info         bencodeInfoBase `bencode:"info"`
 }
 
-func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
-	program.Send(util.ProgressMsg{Progress: 0.0, Message: "Connecting to peers"})
+func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) error {
+	program.Send(util.ProgressMsg{TorrentId: id, Progress: 0.0, Message: "Connecting to peers"})
 	var peerID [20]byte
 	_, err := rand.Read(peerID[:])
 	if err != nil {
 		return err
 	}
+
 	peers := []peers.Peer{}
 	if len(t.AnnounceList) == 0 {
 		peers, err = t.requestPeers(t.Announce, peerID, Port)
@@ -92,7 +93,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
 				continue
 			}
 			peers = append(peers, newPeers...)
-			program.Send(util.ProgressMsg{Progress: 0.0, Message: fmt.Sprintf("Success! Got %d peers.", len(peers))})
+			program.Send(util.ProgressMsg{TorrentId: id, Progress: 0.0, Message: fmt.Sprintf("Success! Got %d peers.", len(peers))})
 			//t.Message = fmt.Sprintf("Success! Got %d peers.", len(newPeers))
 		}
 	}
@@ -100,7 +101,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
 	if len(peers) == 0 {
 		return fmt.Errorf("Failed to connect to trackers\n")
 	}
-	program.Send(util.ProgressMsg{Message: fmt.Sprintf("Connected to %d peers", len(peers))})
+	program.Send(util.ProgressMsg{TorrentId: id, Message: fmt.Sprintf("Connected to %d peers", len(peers))})
 	// TODO: Handle multifile torrents
 	torrent := p2p.Torrent{
 		Peers:       peers,
@@ -112,7 +113,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
 		Name:        t.Name,
 	}
 
-	buf, err := torrent.Download(program)
+	buf, err := torrent.Download(program, id)
 	if err != nil {
 		return err
 	}
@@ -128,7 +129,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program) error {
 			return err
 		}
 	}
-	program.Send(util.ProgressMsg{Message: "Download Complete!"})
+	program.Send(util.ProgressMsg{TorrentId: id, Message: "Download Complete!"})
 	return nil
 }
 

@@ -6,8 +6,9 @@ import (
 )
 
 type ProgressMsg struct {
-	Progress float64
-	Message  string
+	TorrentId int
+	Progress  float64
+	Message   string
 }
 
 func DirExists(dir string) bool {
