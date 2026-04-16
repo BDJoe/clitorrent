@@ -1,11 +1,10 @@
-package torrentFile
+package torrent
 
 import (
 	"bufio"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"gotorrent/internal/peers"
 	"math/rand"
 	"net"
 	"net/http"
@@ -42,7 +41,7 @@ type AnnounceResponse struct {
 	interval      uint32
 	leechers      uint32
 	seeders       uint32
-	Peers         []peers.Peer
+	Peers         []Peer
 }
 
 func (t *TorrentInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16) (string, error) {
@@ -63,12 +62,12 @@ func (t *TorrentInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 	return base.String(), nil
 }
 
-func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
+func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	url, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
 	}
-	peers := []peers.Peer{}
+	peers := []Peer{}
 
 	switch url.Scheme {
 	case "http":
@@ -88,7 +87,7 @@ func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16
 	return peers, nil
 }
 
-func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
+func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	url, err := t.buildTrackerURL(announce, peerID, port)
 	if err != nil {
 		return nil, err
@@ -108,10 +107,10 @@ func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 		return nil, err
 	}
 
-	return peers.Unmarshal([]byte(trackerResp.Peers))
+	return unmarshalPeers([]byte(trackerResp.Peers))
 }
 
-func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]peers.Peer, error) {
+func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	address, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
@@ -234,7 +233,7 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 		interval:      binary.BigEndian.Uint32(b[8:]),
 		leechers:      binary.BigEndian.Uint32(b[12:]),
 		seeders:       binary.BigEndian.Uint32(b[16:]),
-		Peers:         []peers.Peer{},
+		Peers:         []Peer{},
 	}
 
 	// trackerResp := bencodeTrackerResp{}
@@ -249,7 +248,7 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 	// 	return AnnounceResponse{}, err
 	// }
 	// rv.Peers = p
-	p := make([]peers.Peer, peerList)
+	p := make([]Peer, peerList)
 	// for i := range numPeers {
 	// 	offset := i * peerSize
 	// 	peers[i].IP = net.IP(peersBin[offset : offset+4])

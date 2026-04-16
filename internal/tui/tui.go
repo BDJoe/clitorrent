@@ -2,7 +2,7 @@ package tui
 
 import (
 	"fmt"
-	torrentFile "gotorrent/internal/torrentfile"
+	session "gotorrent/internal/torrent"
 	"gotorrent/internal/util"
 	"image/color"
 	"os"
@@ -572,7 +572,7 @@ func (t *torrent) torrentView(m model, i int) string {
 }
 
 func (t *torrent) downloadFile(m model, id int) tea.Msg {
-	tf, err := torrentFile.Open(t.file)
+	tf, err := session.OpenTorrent(t.file)
 	if err != nil {
 		return tea.Quit()
 	}

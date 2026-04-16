@@ -1,4 +1,4 @@
-package message
+package torrent
 
 import (
 	"encoding/binary"
@@ -26,8 +26,8 @@ type Message struct {
 	Payload []byte
 }
 
-// FormatRequest creates a Request message
-func FormatRequest(index, begin, length int) *Message {
+// formatRequest creates a Request message
+func formatRequest(index, begin, length int) *Message {
 	payload := make([]byte, 12)
 	binary.BigEndian.PutUint32(payload[0:4], uint32(index))
 	binary.BigEndian.PutUint32(payload[4:8], uint32(begin))
@@ -35,15 +35,15 @@ func FormatRequest(index, begin, length int) *Message {
 	return &Message{ID: MsgRequest, Payload: payload}
 }
 
-// FormatHave creates a Have message
-func FormatHave(index int) *Message {
+// formatHave creates a Have message
+func formatHave(index int) *Message {
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, uint32(index))
 	return &Message{ID: MsgHave, Payload: payload}
 }
 
-// ParsePiece parses a Piece message and copies its payload into a buffer
-func ParsePiece(index int, buf []byte, msg *Message) (int, error) {
+// parsePiece parses a Piece message and copies its payload into a buffer
+func parsePiece(index int, buf []byte, msg *Message) (int, error) {
 	if msg.ID != MsgPiece {
 		return 0, fmt.Errorf("Expected Piece (ID %d), got ID %d", MsgPiece, msg.ID)
 	}
@@ -66,8 +66,8 @@ func ParsePiece(index int, buf []byte, msg *Message) (int, error) {
 	return len(data), nil
 }
 
-// ParseHave parse a Have message
-func ParseHave(msg *Message) (int, error) {
+// parseHave parse a Have message
+func parseHave(msg *Message) (int, error) {
 	if msg.ID != MsgHave {
 		return 0, fmt.Errorf("Expected Have (ID %d), got ID %d", MsgHave, msg.ID)
 	}
@@ -93,8 +93,8 @@ func (m *Message) Serialize() []byte {
 	return buf
 }
 
-// Read parses a message from a stream. Returns 'nil' on keep-alive message
-func Read(r io.Reader) (*Message, error) {
+// readMessage parses a message from a stream. Returns 'nil' on keep-alive message
+func readMessage(r io.Reader) (*Message, error) {
 	lengthBuf := make([]byte, 4)
 	_, err := io.ReadFull(r, lengthBuf)
 	if err != nil {

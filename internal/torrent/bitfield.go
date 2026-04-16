@@ -1,4 +1,4 @@
-package bitfield
+package torrent
 
 // A bitfield represents the pieces that a peer has
 type Bitfield []byte

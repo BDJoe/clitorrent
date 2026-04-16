@@ -1,12 +1,10 @@
-package torrentFile
+package torrent
 
 import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
-	"gotorrent/internal/p2p"
-	"gotorrent/internal/peers"
 	"gotorrent/internal/util"
 	"os"
 	"path/filepath"
@@ -77,7 +75,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) 
 		return err
 	}
 
-	peers := []peers.Peer{}
+	peers := []Peer{}
 	if len(t.AnnounceList) == 0 {
 		peers, err = t.requestPeers(t.Announce, peerID, Port)
 		if err != nil {
@@ -103,7 +101,7 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) 
 	}
 	program.Send(util.ProgressMsg{TorrentId: id, Message: fmt.Sprintf("Connected to %d peers", len(peers))})
 	// TODO: Handle multifile torrents
-	torrent := p2p.Torrent{
+	torrent := Torrent{
 		Peers:       peers,
 		PeerID:      peerID,
 		InfoHash:    t.InfoHash,
@@ -177,7 +175,7 @@ func (t *TorrentInfo) saveSingleFile(path string, buf []byte) error {
 }
 
 // Open parses a torrent file
-func Open(path string) (TorrentInfo, error) {
+func OpenTorrent(path string) (TorrentInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return TorrentInfo{}, err

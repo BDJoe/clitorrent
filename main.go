@@ -2,18 +2,9 @@ package main
 
 import (
 	"fmt"
-	"gotorrent/internal/p2p"
 	"gotorrent/internal/tui"
 	"os"
-
-	tea "charm.land/bubbletea/v2"
 )
-
-type App struct {
-	frontend *tea.Program
-	model    tea.Model
-	backend  *p2p.Torrent
-}
 
 func main() {
 	// inPath := os.Args[1]

@@ -1,4 +1,4 @@
-package handshake
+package torrent
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ type Handshake struct {
 }
 
 // New creates a new handshake with the standard pstr
-func New(infoHash, peerID [20]byte) *Handshake {
+func newHandshake(infoHash, peerID [20]byte) *Handshake {
 	return &Handshake{
 		Pstr:     "BitTorrent protocol",
 		InfoHash: infoHash,
@@ -34,7 +34,7 @@ func (h *Handshake) Serialize() []byte {
 }
 
 // Read parses a handshake from a stream
-func Read(r io.Reader) (*Handshake, error) {
+func readHandshake(r io.Reader) (*Handshake, error) {
 	lengthBuf := make([]byte, 1)
 	_, err := io.ReadFull(r, lengthBuf)
 	if err != nil {
