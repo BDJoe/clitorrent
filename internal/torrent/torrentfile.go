@@ -16,7 +16,7 @@ import (
 // Port to listen on
 const Port uint16 = 6881
 
-// TorrentFile encodes the metadata from a .torrent file
+// TorrentInfo encodes the metadata from a .torrent file
 type TorrentInfo struct {
 	Announce     string
 	AnnounceList [][]string
@@ -67,8 +67,25 @@ type bencodeTorrent struct {
 	Info         bencodeInfoBase `bencode:"info"`
 }
 
+// Open parses a torrent file
+func OpenTorrent(path string) (TorrentInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return TorrentInfo{}, err
+	}
+	defer file.Close()
+
+	bto := bencodeTorrent{}
+	err = bencode.Unmarshal(file, &bto)
+	if err != nil {
+		return TorrentInfo{}, err
+	}
+
+	return bto.toTorrentInfo()
+}
+
 func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) error {
-	program.Send(util.ProgressMsg{TorrentId: id, Progress: 0.0, Message: "Connecting to peers"})
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers:"})
 	var peerID [20]byte
 	_, err := rand.Read(peerID[:])
 	if err != nil {
@@ -79,28 +96,26 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) 
 	if len(t.AnnounceList) == 0 {
 		peers, err = t.requestPeers(t.Announce, peerID, Port)
 		if err != nil {
+			program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
 			return err
 		}
 	} else {
 		for _, announce := range t.AnnounceList {
-			// program.Send(util.ProgressMsg{Progress: 0.0, Message: fmt.Sprintf("Connecting to %s\n", announce[0])})
-			//t.Message = fmt.Sprintf("Connecting to %s\n", announce[0])
 			newPeers, err := t.requestPeers(announce[0], peerID, Port)
 			if err != nil {
-				//fmt.Println(err)
+				//program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
 				continue
 			}
 			peers = append(peers, newPeers...)
-			program.Send(util.ProgressMsg{TorrentId: id, Progress: 0.0, Message: fmt.Sprintf("Success! Got %d peers.", len(peers))})
-			//t.Message = fmt.Sprintf("Success! Got %d peers.", len(newPeers))
+			program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Connecting to peers: %d connected", len(peers))})
 		}
 	}
 
 	if len(peers) == 0 {
+		program.Send(util.ErrorMsg{TorrentId: id, Err: "Failed to connect to trackers"})
 		return fmt.Errorf("Failed to connect to trackers\n")
 	}
-	program.Send(util.ProgressMsg{TorrentId: id, Message: fmt.Sprintf("Connected to %d peers", len(peers))})
-	// TODO: Handle multifile torrents
+
 	torrent := Torrent{
 		Peers:       peers,
 		PeerID:      peerID,
@@ -109,25 +124,27 @@ func (t *TorrentInfo) DownloadToFile(path string, program *tea.Program, id int) 
 		PieceLength: t.PieceLength,
 		Length:      t.Length,
 		Name:        t.Name,
+		Files:       t.Files,
+		Path:        path,
 	}
 
-	buf, err := torrent.Download(program, id)
+	err = torrent.Download(program, id)
 	if err != nil {
 		return err
 	}
 
-	if len(t.Files) > 0 {
-		err = t.saveMultiFile(path, buf)
-		if err != nil {
-			return err
-		}
-	} else {
-		err = t.saveSingleFile(path, buf)
-		if err != nil {
-			return err
-		}
-	}
-	program.Send(util.ProgressMsg{TorrentId: id, Message: "Download Complete!"})
+	// if len(t.Files) > 0 {
+	// 	err = t.saveMultiFile(path, buf)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// } else {
+	// 	err = t.saveSingleFile(path, buf)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Download Complete!"})
 	return nil
 }
 
@@ -174,24 +191,6 @@ func (t *TorrentInfo) saveSingleFile(path string, buf []byte) error {
 	return nil
 }
 
-// Open parses a torrent file
-func OpenTorrent(path string) (TorrentInfo, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return TorrentInfo{}, err
-	}
-	defer file.Close()
-
-	bto := bencodeTorrent{}
-	err = bencode.Unmarshal(file, &bto)
-	if err != nil {
-		return TorrentInfo{}, err
-	}
-
-	//var data any
-	return bto.toTorrentFile()
-}
-
 func (i *bencodeInfoSingle) hash() ([20]byte, error) {
 	var buf bytes.Buffer
 	err := bencode.Marshal(&buf, *i)
@@ -233,7 +232,7 @@ func (i *bencodeInfoBase) splitPieceHashes() ([][20]byte, error) {
 	return hashes, nil
 }
 
-func (bto *bencodeTorrent) toTorrentFile() (TorrentInfo, error) {
+func (bto *bencodeTorrent) toTorrentInfo() (TorrentInfo, error) {
 	if bto.Info.Length == 0 {
 		t, err := parseMultiTorrent(bto)
 		if err != nil {

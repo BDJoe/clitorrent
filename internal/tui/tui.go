@@ -6,7 +6,6 @@ import (
 	"gotorrent/internal/util"
 	"image/color"
 	"os"
-	"path"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -32,12 +31,14 @@ type model struct {
 }
 
 type torrent struct {
-	path     string
-	file     string
+	savePath string
+	filePath string
 	progress progress.Model
 	status   string
 	spinner  spinner.Model
 	state    torrentState
+	err      string
+	torrent  session.TorrentInfo
 }
 
 const (
@@ -61,11 +62,13 @@ const (
 	uiForm     uiState = 3
 )
 
-type clearErrorMsg struct{}
+type clearErrorMsg struct {
+	id int
+}
 
-func clearErrorAfter(t time.Duration) tea.Cmd {
+func clearErrorAfter(t time.Duration, id int) tea.Cmd {
 	return tea.Tick(t, func(_ time.Time) tea.Msg {
-		return clearErrorMsg{}
+		return clearErrorMsg{id: id}
 	})
 }
 
@@ -193,13 +196,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case util.ProgressMsg:
 		var cmd tea.Cmd
-		if msg.Progress > 0 {
-			cmd = m.torrents[msg.TorrentId].progress.SetPercent(msg.Progress)
-		}
-		if len(msg.Message) > 0 {
-			m.torrents[msg.TorrentId].status = msg.Message
-		}
+		cmd = m.torrents[msg.TorrentId].progress.SetPercent(msg.Progress)
 		return m, cmd
+
+	case util.StatusMsg:
+		var cmd tea.Cmd
+		m.torrents[msg.TorrentId].status = msg.Status
+		return m, cmd
+
+	case util.ErrorMsg:
+		var cmd tea.Cmd
+		cmd = clearErrorAfter(2*time.Second, msg.TorrentId)
+		m.torrents[msg.TorrentId].err = msg.Err
+		return m, cmd
+
+	case clearErrorMsg:
+		m.torrents[msg.id].err = ""
+		return m, nil
 
 	case progress.FrameMsg:
 		var (
@@ -298,9 +311,10 @@ func formUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.form.State == huh.StateCompleted {
 		path := m.form.GetString("path") + "/"
 		file := m.form.GetString("file")
-		torrent := torrent{path: path, file: file}
+		torrent := torrent{savePath: path, filePath: file}
 		torrent.initTorrent()
 		m.torrents = append(m.torrents, &torrent)
+		torrent.openFile(file)
 		m.state = uiMain
 	}
 
@@ -553,39 +567,53 @@ func (t *torrent) initTorrent() tea.Cmd {
 }
 
 func (t *torrent) progressView() string {
-	s := lipgloss.JoinHorizontal(lipgloss.Top, t.spinner.View(), t.progress.View(), "   ", t.status)
+	var s string
+	if t.state == torrentStarted {
+		s = lipgloss.JoinHorizontal(lipgloss.Top, t.progress.View(), "   ", t.spinner.View(), t.status)
+	} else {
+		s = lipgloss.JoinHorizontal(lipgloss.Top, t.progress.View(), "   ", t.status)
+	}
+
 	return s
 }
 
 func (t *torrent) torrentView(m model, i int) string {
-	_, name := path.Split(t.file)
 	styles := m.styles(m.hasDarkBg)
 	var button string
+	var view string
 	button = styles.blurredButton("Start")
 
 	if m.menuIndex == 0 && i == m.downloadIndex {
 		button = styles.focusedButton("Start")
 	}
+	info := lipgloss.JoinHorizontal(lipgloss.Top, t.torrent.Name, "    ", button)
+	if len(t.err) > 0 {
+		err := styles.ErrorHeaderText.Render(t.err)
+		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView(), err)
+	} else {
+		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView())
+	}
 
-	info := lipgloss.JoinHorizontal(lipgloss.Top, name, "    ", button)
-	return lipgloss.JoinVertical(lipgloss.Top, info, t.progressView())
+	return view
 }
 
-func (t *torrent) downloadFile(m model, id int) tea.Msg {
-	tf, err := session.OpenTorrent(t.file)
+func (t *torrent) openFile(filePath string) tea.Msg {
+	tf, err := session.OpenTorrent(filePath)
 	if err != nil {
 		return tea.Quit()
 	}
+	t.torrent = tf
+	return t
+}
+
+func (t *torrent) downloadFile(m model, id int) tea.Msg {
 	t.state = torrentStarted
 	go func() {
-		err = tf.DownloadToFile(t.path, m.program, id)
+		err := t.torrent.DownloadToFile(t.savePath, m.program, id)
 		if err != nil {
 			t.status = err.Error()
 		}
 		t.state = torrentFinished
 	}()
-	if err != nil {
-		return tea.Quit()
-	}
 	return m
 }

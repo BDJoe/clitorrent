@@ -5,7 +5,8 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"gotorrent/internal/util"
-	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,15 +20,17 @@ const MaxBackLog = 5
 
 // Torrent holds data required to download a torrent from a list of peers
 type Torrent struct {
-	Peers           []Peer
-	PeerID          [20]byte
-	InfoHash        [20]byte
-	PieceHashes     [][20]byte
-	PieceLength     int
-	Length          int
-	Name            string
-	Progress        float64
-	ProgressMessage string
+	Peers       []Peer
+	Seeders     uint32
+	Leechers    uint32
+	PeerID      [20]byte
+	InfoHash    [20]byte
+	PieceHashes [][20]byte
+	PieceLength int
+	Length      int
+	Name        string
+	Files       []TorrentFile
+	Path        string
 }
 
 type pieceWork struct {
@@ -129,7 +132,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 	return nil
 }
 
-func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult) {
+func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult, program *tea.Program, id int) {
 	c, err := newClient(peer, t.PeerID, t.InfoHash)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
@@ -157,7 +160,7 @@ func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, resu
 
 		err = checkIntegrity(pw, buf)
 		if err != nil {
-			log.Printf("Piece #%d failed integrity check\n", pw.index)
+			program.Send(util.ErrorMsg{TorrentId: id, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
 			workQueue <- pw
 			continue
 		}
@@ -181,8 +184,8 @@ func (t *Torrent) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-func (t *Torrent) Download(program *tea.Program, id int) ([]byte, error) {
-	program.Send(util.ProgressMsg{TorrentId: id, Message: "Downloading"})
+func (t *Torrent) Download(program *tea.Program, id int) error {
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
@@ -193,7 +196,7 @@ func (t *Torrent) Download(program *tea.Program, id int) ([]byte, error) {
 
 	// Start workers
 	for _, peer := range t.Peers {
-		go t.startDownloadWorker(peer, workQueue, results)
+		go t.startDownloadWorker(peer, workQueue, results, program, id)
 	}
 
 	// Collect results into a buffer until full
@@ -203,15 +206,109 @@ func (t *Torrent) Download(program *tea.Program, id int) ([]byte, error) {
 		res := <-results
 		begin, end := t.calculateBoundsForPiece(res.index)
 		copy(buf[begin:end], res.buf)
+		t.saveFile(res.buf, begin)
 		donePieces++
 		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(donePieces, len(t.PieceHashes))})
 	}
 	close(workQueue)
-	return buf, nil
+	return nil
 }
 
 var CompletePercentage float64
 
 func getCompletePercentage(done int, total int) float64 {
 	return float64(done) / float64(total)
+}
+
+func (t *Torrent) saveFile(buf []byte, begin int) error {
+	if len(t.Files) > 0 {
+		err := t.saveMultiFile(buf, begin)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := t.saveSingleFile(buf, begin)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Torrent) saveSingleFile(buf []byte, begin int) error {
+	if !util.DirExists(t.Path) {
+		util.MakeDir(t.Path)
+	}
+	fullPath := filepath.Join(t.Path, t.Name)
+	var outFile *os.File
+	var err error
+	if !util.DirExists(fullPath) {
+		outFile, err = os.Create(fullPath)
+		if err != nil {
+			return err
+		}
+	} else {
+		outFile, err = os.OpenFile(fullPath, os.O_RDWR, 0666)
+		if err != nil {
+			return err
+		}
+	}
+	defer outFile.Close()
+	_, err = outFile.WriteAt(buf, int64(begin))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (t *Torrent) saveMultiFile(buf []byte, begin int) error {
+	bytesWritten := 0
+	for len(buf) > 0 {
+		startPos := begin + bytesWritten
+		bytesToWrite := len(buf)
+		lengthCounter := 0
+		var torrentFile TorrentFile
+		for _, torrentFile = range t.Files {
+			fileEnd := lengthCounter + torrentFile.Length
+			if startPos < fileEnd {
+				if len(buf)+startPos > fileEnd {
+					bytesToWrite = fileEnd - startPos
+				}
+				break
+			}
+			lengthCounter += torrentFile.Length
+		}
+
+		filePath := filepath.Join(torrentFile.Path...)
+		d, f := filepath.Split(filePath)
+		dir := filepath.Join(t.Path, t.Name, d)
+		fullPath := filepath.Join(dir, f)
+
+		if !util.DirExists(dir) {
+			util.MakeDir(dir)
+		}
+
+		var outFile *os.File
+		var err error
+		if !util.DirExists(fullPath) {
+			outFile, err = os.Create(fullPath)
+			if err != nil {
+				return err
+			}
+		} else {
+			outFile, err = os.OpenFile(fullPath, os.O_RDWR, 0666)
+			if err != nil {
+				return err
+			}
+		}
+		defer outFile.Close()
+		_, err = outFile.WriteAt(buf[:bytesToWrite], int64(startPos)-int64(lengthCounter))
+		if err != nil {
+			return err
+		}
+		buf = buf[bytesToWrite:]
+		bytesWritten += bytesToWrite
+	}
+	return nil
 }
