@@ -6,6 +6,7 @@ import (
 	"gotorrent/internal/util"
 	"image/color"
 	"os"
+	"path/filepath"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -22,7 +23,7 @@ type model struct {
 	state         uiState
 	program       *tea.Program
 	err           error
-	torrents      []*torrent
+	torrents      []*torrentModel
 	form          *huh.Form
 	styles        func(bool) *Styles
 	hasDarkBg     bool
@@ -30,15 +31,15 @@ type model struct {
 	height        int
 }
 
-type torrent struct {
-	savePath string
-	filePath string
-	progress progress.Model
-	status   string
-	spinner  spinner.Model
-	state    torrentState
-	err      string
-	torrent  session.TorrentInfo
+type torrentModel struct {
+	SavePath string
+	FilePath string
+	Progress progress.Model
+	Status   string
+	Spinner  spinner.Model
+	State    torrentState
+	Err      string
+	Torrent  *session.Session
 }
 
 const (
@@ -144,7 +145,11 @@ func initModel() model {
 	m.choices = []string{"downloads", "new", "exit"}
 	m.menuIndex = 1
 	m.downloadIndex = 0
-	m.state = uiState(uiMain)
+	torrents, err := getCache()
+	if err == nil {
+		m.torrents = torrents
+	}
+	m.state = uiMain
 	return m
 }
 
@@ -173,7 +178,12 @@ func newForm() *huh.Form {
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	var cmds []tea.Cmd
+	for _, t := range m.torrents {
+		cmd := t.Progress.SetPercent(float64(len(t.Torrent.PiecesDone)) / float64(len(t.Torrent.PieceHashes)))
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -196,22 +206,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case util.ProgressMsg:
 		var cmd tea.Cmd
-		cmd = m.torrents[msg.TorrentId].progress.SetPercent(msg.Progress)
+		cmd = m.torrents[msg.TorrentId].Progress.SetPercent(msg.Progress)
 		return m, cmd
 
 	case util.StatusMsg:
 		var cmd tea.Cmd
-		m.torrents[msg.TorrentId].status = msg.Status
+		m.torrents[msg.TorrentId].Status = msg.Status
 		return m, cmd
 
 	case util.ErrorMsg:
 		var cmd tea.Cmd
 		cmd = clearErrorAfter(2*time.Second, msg.TorrentId)
-		m.torrents[msg.TorrentId].err = msg.Err
+		m.torrents[msg.TorrentId].Err = msg.Err
 		return m, cmd
 
 	case clearErrorMsg:
-		m.torrents[msg.id].err = ""
+		m.torrents[msg.id].Err = ""
 		return m, nil
 
 	case progress.FrameMsg:
@@ -220,11 +230,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds []tea.Cmd
 		)
 		for _, t := range m.torrents {
-			if t.state == torrentStarted {
-				t.progress, cmd = t.progress.Update(msg)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				}
+			t.Progress, cmd = t.Progress.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
 			}
 		}
 		return m, tea.Batch(cmds...)
@@ -235,8 +243,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds []tea.Cmd
 		)
 		for _, t := range m.torrents {
-			if t.state == torrentStarted {
-				t.spinner, cmd = t.spinner.Update(msg)
+			if t.State == torrentStarted {
+				t.Spinner, cmd = t.Spinner.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
@@ -311,64 +319,18 @@ func formUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.form.State == huh.StateCompleted {
 		path := m.form.GetString("path") + "/"
 		file := m.form.GetString("file")
-		torrent := torrent{savePath: path, filePath: file}
+		torrent := torrentModel{SavePath: path, FilePath: file}
 		torrent.initTorrent()
 		m.torrents = append(m.torrents, &torrent)
-		torrent.openFile(file)
+		torrent.openFile()
+		prog := torrent.Progress.SetPercent(float64(len(torrent.Torrent.PiecesDone)) / float64(len(torrent.Torrent.PieceHashes)))
+		cmds = append(cmds, prog)
+		torrent.createCacheTorrent()
 		m.state = uiMain
 	}
 
 	return m, tea.Batch(cmds...)
 }
-
-// func pickerView(m model) string {
-// 	var s strings.Builder
-// 	s.WriteString("\n  ")
-// 	if m.err != nil {
-// 		s.WriteString(m.filePicker.Styles.DisabledFile.Render(m.err.Error()))
-// 	} else if m.selectedFile == "" {
-// 		s.WriteString("Pick a file:")
-// 	} else {
-// 		s.WriteString("Selected file: " + m.filePicker.Styles.Selected.Render(m.selectedFile))
-// 	}
-// 	s.WriteString("\n\n" + m.filePicker.View() + "\n")
-
-// 	return s.String()
-// }
-
-// func pickerUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
-// 	var cmd tea.Cmd
-// 	switch msg := msg.(type) {
-// 	case tea.KeyPressMsg:
-// 		if msg.String() == "q" {
-// 			m.state = Main
-// 			return m, cmd
-// 		}
-// 	case clearErrorMsg:
-// 		m.err = nil
-// 	}
-
-// 	m.filePicker, cmd = m.filePicker.Update(msg)
-
-// 	// Did the user select a file?
-// 	if didSelect, path := m.filePicker.DidSelectFile(msg); didSelect {
-// 		// Get the path of the selected file.
-// 		m.selectedFile = path
-// 		m.state = Main
-// 		return m, cmd
-// 	}
-
-// 	// Did the user select a disabled file?
-// 	// This is only necessary to display an error to the user.
-// 	if didSelect, path := m.filePicker.DidSelectDisabledFile(msg); didSelect {
-// 		// Let's clear the selectedFile and display an error.
-// 		m.err = errors.New(path + " is not valid.")
-// 		m.selectedFile = ""
-// 		return m, tea.Batch(cmd, clearErrorAfter(2*time.Second))
-// 	}
-
-// 	return m, cmd
-// }
 
 func downloadView(m model) string {
 	downloads := []string{}
@@ -393,7 +355,7 @@ func downloadUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 			if s == "enter" {
 				m.torrents[m.downloadIndex].downloadFile(m, m.downloadIndex)
 				cmd = func() tea.Msg {
-					return m.torrents[m.downloadIndex].spinner.Tick()
+					return m.torrents[m.downloadIndex].Spinner.Tick()
 				}
 			}
 			if s == "up" {
@@ -408,16 +370,6 @@ func downloadUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.menuIndex++
 				}
 			}
-			// if s == "left" {
-			// 	if m.menuIndex == len(m.torrents)+len(m.choices)-1 {
-			// 		m.menuIndex--
-			// 	}
-			// }
-			// if s == "right" {
-			// 	if m.menuIndex == len(m.torrents)+len(m.choices)-2 {
-			// 		m.menuIndex++
-			// 	}
-			// }
 
 			return m, cmd
 		}
@@ -425,44 +377,6 @@ func downloadUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, cmd
 }
-
-// func mainView(m model) string {
-// 	styles := m.styles(m.hasDarkBg)
-// 	// _, file := path.Split(m.file)
-// 	// path := m.path
-
-// 	addButton := styles.blurredButton("Add Torrent")
-// 	exitButton := styles.blurredButton("Exit")
-// 	switch m.choices[m.chosenIndex] {
-// 	case "new":
-// 		addButton = styles.focusedButton("Add Torrent")
-// 	case "exit":
-// 		exitButton = styles.focusedButton("Exit")
-// 	}
-
-// 	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, addButton, exitButton)
-// 	s := lipgloss.JoinVertical(lipgloss.Top, styles.Header, styles.BorderStyle.Width(m.width).Render(body), footer)
-// 	// v := tea.NewView(s)
-// 	// var c *tea.Cursor
-// 	// if m.filePath.Focused() {
-// 	// 	c = m.filePath.Cursor()
-// 	// 	c.Y += lipgloss.Height(header)
-// 	// 	v.Cursor = c
-// 	// }
-
-// 	if m.state == Form {
-// 		popUp := lipgloss.NewLayer(
-// 			lipgloss.NewStyle().
-// 				Border(lipgloss.RoundedBorder()).
-// 				Align(lipgloss.Center, lipgloss.Center).
-// 				Render(m.form.View()),
-// 		).X(m.width/2 - lipgloss.Width(m.form.View())/2)
-// 		comp := lipgloss.NewCompositor(lipgloss.NewLayer(s), popUp)
-// 		return comp.Render()
-// 	}
-
-// 	return s
-// }
 
 func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
@@ -473,8 +387,6 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		// case "ctrl+c":
-		// 	return m, tea.Quit
 		case "up", "down", "left", "right", "enter":
 			s := msg.String()
 			if s == "enter" {
@@ -520,24 +432,11 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 func progressUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{}
 	switch msg := msg.(type) {
-	// case tea.WindowSizeMsg:
-	// 	t.progress.SetWidth(msg.Width - padding*2 - 4)
-	// 	return m, nil
-
-	// case util.ProgressMsg:
-	// 	var cmd tea.Cmd
-	// 	if msg.Progress > 0 {
-	// 		cmd = t.progress.SetPercent(msg.Progress)
-	// 	}
-	// 	if len(msg.Message) > 0 {
-	// 		t.status = msg.Message
-	// 	}
-	// 	return m, cmd
 
 	case progress.FrameMsg:
 		for _, t := range m.torrents {
 			var cmd tea.Cmd
-			t.progress, cmd = t.progress.Update(msg)
+			t.Progress, cmd = t.Progress.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
@@ -545,7 +444,7 @@ func progressUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		for _, t := range m.torrents {
 			var cmd tea.Cmd
-			t.spinner, cmd = t.spinner.Update(msg)
+			t.Spinner, cmd = t.Spinner.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
@@ -553,31 +452,32 @@ func progressUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (t *torrent) initTorrent() tea.Cmd {
+func (t *torrentModel) initTorrent() tea.Cmd {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	t.spinner = s
+	t.Spinner = s
 
 	p := progress.New(progress.WithDefaultBlend())
-	t.progress = p
-	t.status = "Not Started"
-	t.state = torrentStopped
-	return t.progress.Init()
+	t.Progress = p
+	t.Status = "Not Started"
+	t.State = torrentStopped
+
+	return t.Progress.Init()
 }
 
-func (t *torrent) progressView() string {
+func (t *torrentModel) progressView() string {
 	var s string
-	if t.state == torrentStarted {
-		s = lipgloss.JoinHorizontal(lipgloss.Top, t.progress.View(), "   ", t.spinner.View(), t.status)
+	if t.State == torrentStarted {
+		s = lipgloss.JoinHorizontal(lipgloss.Top, t.Progress.View(), "   ", t.Spinner.View(), t.Status)
 	} else {
-		s = lipgloss.JoinHorizontal(lipgloss.Top, t.progress.View(), "   ", t.status)
+		s = lipgloss.JoinHorizontal(lipgloss.Top, t.Progress.View(), "   ", t.Status)
 	}
 
 	return s
 }
 
-func (t *torrent) torrentView(m model, i int) string {
+func (t *torrentModel) torrentView(m model, i int) string {
 	styles := m.styles(m.hasDarkBg)
 	var button string
 	var view string
@@ -586,9 +486,9 @@ func (t *torrent) torrentView(m model, i int) string {
 	if m.menuIndex == 0 && i == m.downloadIndex {
 		button = styles.focusedButton("Start")
 	}
-	info := lipgloss.JoinHorizontal(lipgloss.Top, t.torrent.Name, "    ", button)
-	if len(t.err) > 0 {
-		err := styles.ErrorHeaderText.Render(t.err)
+	info := lipgloss.JoinHorizontal(lipgloss.Top, t.Torrent.Name, "    ", button)
+	if len(t.Err) > 0 {
+		err := styles.ErrorHeaderText.Render(t.Err)
 		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView(), err)
 	} else {
 		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView())
@@ -597,23 +497,79 @@ func (t *torrent) torrentView(m model, i int) string {
 	return view
 }
 
-func (t *torrent) openFile(filePath string) tea.Msg {
-	tf, err := session.OpenTorrent(filePath)
+func (t *torrentModel) openFile() tea.Msg {
+	tf, err := session.OpenTorrent(t.FilePath, t.SavePath)
 	if err != nil {
 		return tea.Quit()
 	}
-	t.torrent = tf
+	t.Torrent = tf
 	return t
 }
 
-func (t *torrent) downloadFile(m model, id int) tea.Msg {
-	t.state = torrentStarted
+func (t *torrentModel) createCacheTorrent() error {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(cache, "cliTorrent")
+	if !util.Exists(path) {
+		util.MakeDir(path)
+	}
+	_, name := filepath.Split(t.FilePath)
+	f, err := os.Create(filepath.Join(path, name))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	// c := session.BencodeTorrentModel{FilePath: t.FilePath, SavePath: t.SavePath}
+	// err = bencode.Marshal(f, c)
+	data, err := os.ReadFile(t.FilePath)
+	if err != nil {
+		return err
+	}
+	f.Write(data)
+	return nil
+}
+
+func getCache() ([]*torrentModel, error) {
+	cachePath, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(cachePath, "cliTorrent")
+	if !util.Exists(path) {
+		return nil, err
+	}
+	var torrents []*torrentModel
+	cache, err := session.GetCachedTorrents()
+	if err != nil {
+		return torrents, err
+	}
+	for _, file := range cache {
+		// f, err := os.Open(filepath.Join(path, file.Name()))
+		// if err != nil {
+		// 	return nil, err
+		// }
+		torrent := torrentModel{}
+		// c := session.BencodeTorrentModel{}
+		// bencode.Unmarshal(f, &c)
+		torrent.initTorrent()
+		torrent.Torrent = file
+		torrent.SavePath = file.Path
+		torrents = append(torrents, &torrent)
+	}
+
+	return torrents, nil
+}
+
+func (t *torrentModel) downloadFile(m model, id int) tea.Msg {
+	t.State = torrentStarted
 	go func() {
-		err := t.torrent.DownloadToFile(t.savePath, m.program, id)
+		err := t.Torrent.StartDownload(t.SavePath, m.program, id)
 		if err != nil {
-			t.status = err.Error()
+			t.Status = err.Error()
 		}
-		t.state = torrentFinished
+		t.State = torrentFinished
 	}()
 	return m
 }

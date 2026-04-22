@@ -7,13 +7,17 @@ require (
 	charm.land/bubbletea/v2 v2.0.2
 	charm.land/lipgloss/v2 v2.0.2
 	github.com/jackpal/bencode-go v1.0.2
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
 	github.com/catppuccin/go v0.2.0 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (

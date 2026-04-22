@@ -7,6 +7,7 @@ import (
 	"gotorrent/internal/util"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,19 +19,25 @@ const MaxBlockSize = 16384
 // MaxBackLog is the number of unfulfilled requests a client can have in its pipeline
 const MaxBackLog = 5
 
-// Torrent holds data required to download a torrent from a list of peers
-type Torrent struct {
+// Session holds data required to download a torrent from a list of peers
+type Session struct {
+	TrackerInfo
 	Peers       []Peer
 	Seeders     uint32
 	Leechers    uint32
 	PeerID      [20]byte
-	InfoHash    [20]byte
 	PieceHashes [][20]byte
 	PieceLength int
 	Length      int
 	Name        string
 	Files       []TorrentFile
 	Path        string
+	PiecesDone  []int
+}
+
+type cache struct {
+	Path       string
+	PiecesDone []int
 }
 
 type pieceWork struct {
@@ -132,7 +139,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 	return nil
 }
 
-func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult, program *tea.Program, id int) {
+func (t *Session) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult, program *tea.Program, id int) {
 	c, err := newClient(peer, t.PeerID, t.InfoHash)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
@@ -170,7 +177,7 @@ func (t *Torrent) startDownloadWorker(peer Peer, workQueue chan *pieceWork, resu
 	}
 }
 
-func (t *Torrent) calculateBoundsForPiece(index int) (begin int, end int) {
+func (t *Session) calculateBoundsForPiece(index int) (begin int, end int) {
 	begin = index * t.PieceLength
 	end = begin + t.PieceLength
 	if end > t.Length {
@@ -179,19 +186,39 @@ func (t *Torrent) calculateBoundsForPiece(index int) (begin int, end int) {
 	return begin, end
 }
 
-func (t *Torrent) calculatePieceSize(index int) int {
+func (t *Session) calculatePieceSize(index int) int {
 	begin, end := t.calculateBoundsForPiece(index)
 	return end - begin
 }
 
-func (t *Torrent) Download(program *tea.Program, id int) error {
+func (t *Session) StartDownload(path string, program *tea.Program, id int) error {
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
+
+	peers, err := GetPeers(&t.TrackerInfo, t.PeerID)
+	if err != nil {
+		return err
+	}
+	t.Peers = peers
+	err = t.Download(program, id)
+	if err != nil {
+		return err
+	}
+
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Download Complete!"})
+	return nil
+}
+
+func (t *Session) Download(program *tea.Program, id int) error {
+
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
 	for index, hash := range t.PieceHashes {
-		length := t.calculatePieceSize(index)
-		workQueue <- &pieceWork{index, hash, length}
+		if !slices.Contains(t.PiecesDone, index) {
+			length := t.calculatePieceSize(index)
+			workQueue <- &pieceWork{index, hash, length}
+		}
 	}
 
 	// Start workers
@@ -200,27 +227,128 @@ func (t *Torrent) Download(program *tea.Program, id int) error {
 	}
 
 	// Collect results into a buffer until full
-	buf := make([]byte, t.Length)
-	donePieces := 0
-	for donePieces < len(t.PieceHashes) {
+	//donePieces := len(t.PiecesDone)
+	for len(t.PiecesDone) < len(t.PieceHashes) {
 		res := <-results
-		begin, end := t.calculateBoundsForPiece(res.index)
-		copy(buf[begin:end], res.buf)
+		begin, _ := t.calculateBoundsForPiece(res.index)
 		t.saveFile(res.buf, begin)
-		donePieces++
-		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(donePieces, len(t.PieceHashes))})
+		//donePieces++
+		t.PiecesDone = append(t.PiecesDone, res.index)
+		//err := t.saveCache()
+		//if err != nil {
+		//	program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
+		//}
+		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(t.PiecesDone), len(t.PieceHashes))})
 	}
 	close(workQueue)
 	return nil
 }
 
-var CompletePercentage float64
-
 func getCompletePercentage(done int, total int) float64 {
 	return float64(done) / float64(total)
 }
 
-func (t *Torrent) saveFile(buf []byte, begin int) error {
+func (t *Session) getCache(buf []byte) error {
+	for index, hash := range t.PieceHashes {
+		begin, end := t.calculateBoundsForPiece(index)
+		if len(buf) >= end {
+			bufHash := sha1.Sum(buf[begin:end])
+			if !bytes.Equal(bufHash[:], hash[:]) {
+				continue
+			}
+			t.PiecesDone = append(t.PiecesDone, index)
+		}
+	}
+	return nil
+}
+
+func (t *Session) initFile() error {
+	var buf []byte
+	var err error
+	if len(t.Files) > 0 {
+		buf, err = t.initMultiFile()
+		if err != nil {
+			return err
+		}
+	} else {
+		buf, err = t.initSingleFile()
+		if err != nil {
+			return err
+		}
+	}
+	if buf != nil {
+		err = t.getCache(buf)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Session) initSingleFile() ([]byte, error) {
+	if !util.Exists(t.Path) {
+		util.MakeDir(t.Path)
+	}
+	fullPath := filepath.Join(t.Path, t.Name)
+
+	if !util.Exists(fullPath) {
+		file, err := os.Create(fullPath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		return nil, nil
+	}
+
+	fileBuf, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	return fileBuf, err
+}
+
+func (t *Session) initMultiFile() ([]byte, error) {
+	basePath := filepath.Join(t.Path, t.Name)
+	if !util.Exists(basePath) {
+		util.MakeDir(basePath)
+		var torrentFile TorrentFile
+		for _, torrentFile = range t.Files {
+			filePath := filepath.Join(torrentFile.Path...)
+			d, f := filepath.Split(filePath)
+			fullPath := filepath.Join(basePath, d, f)
+			file, err := os.Create(fullPath)
+			if err != nil {
+				return nil, err
+			}
+			file.Close()
+		}
+		return nil, nil
+	}
+	var torrentFile TorrentFile
+	var buf []byte
+	for _, torrentFile = range t.Files {
+		filePath := filepath.Join(torrentFile.Path...)
+		d, f := filepath.Split(filePath)
+		fullPath := filepath.Join(basePath, d, f)
+		if !util.Exists(fullPath) {
+			f, err := os.Create(fullPath)
+			if err != nil {
+				return nil, err
+			}
+			f.Close()
+		}
+		file, err := os.ReadFile(fullPath)
+
+		if err != nil {
+			return nil, err
+		}
+
+		buf = append(buf, file...)
+	}
+	return buf, nil
+}
+
+func (t *Session) saveFile(buf []byte, begin int) error {
 	if len(t.Files) > 0 {
 		err := t.saveMultiFile(buf, begin)
 		if err != nil {
@@ -235,14 +363,14 @@ func (t *Torrent) saveFile(buf []byte, begin int) error {
 	return nil
 }
 
-func (t *Torrent) saveSingleFile(buf []byte, begin int) error {
-	if !util.DirExists(t.Path) {
+func (t *Session) saveSingleFile(buf []byte, begin int) error {
+	if !util.Exists(t.Path) {
 		util.MakeDir(t.Path)
 	}
 	fullPath := filepath.Join(t.Path, t.Name)
 	var outFile *os.File
 	var err error
-	if !util.DirExists(fullPath) {
+	if !util.Exists(fullPath) {
 		outFile, err = os.Create(fullPath)
 		if err != nil {
 			return err
@@ -262,7 +390,7 @@ func (t *Torrent) saveSingleFile(buf []byte, begin int) error {
 	return nil
 }
 
-func (t *Torrent) saveMultiFile(buf []byte, begin int) error {
+func (t *Session) saveMultiFile(buf []byte, begin int) error {
 	bytesWritten := 0
 	for len(buf) > 0 {
 		startPos := begin + bytesWritten
@@ -285,13 +413,13 @@ func (t *Torrent) saveMultiFile(buf []byte, begin int) error {
 		dir := filepath.Join(t.Path, t.Name, d)
 		fullPath := filepath.Join(dir, f)
 
-		if !util.DirExists(dir) {
+		if !util.Exists(dir) {
 			util.MakeDir(dir)
 		}
 
 		var outFile *os.File
 		var err error
-		if !util.DirExists(fullPath) {
+		if !util.Exists(fullPath) {
 			outFile, err = os.Create(fullPath)
 			if err != nil {
 				return err

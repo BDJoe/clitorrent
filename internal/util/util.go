@@ -20,7 +20,7 @@ type ErrorMsg struct {
 	Err       string
 }
 
-func DirExists(dir string) bool {
+func Exists(dir string) bool {
 	_, err := os.Stat(dir)
 	if err == nil {
 		return true

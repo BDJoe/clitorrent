@@ -15,6 +15,13 @@ import (
 	"github.com/jackpal/bencode-go"
 )
 
+type TrackerInfo struct {
+	Announce     string
+	AnnounceList [][]string
+	InfoHash     [20]byte
+	Length       int
+}
+
 type bencodeTrackerResp struct {
 	Interval int    `bencode:"interval"`
 	Peers    string `bencode:"peers"`
@@ -44,7 +51,34 @@ type AnnounceResponse struct {
 	Peers         []Peer
 }
 
-func (t *TorrentInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16) (string, error) {
+// Port to listen on
+const Port uint16 = 6881
+
+func GetPeers(t *TrackerInfo, peerID [20]byte) ([]Peer, error) {
+	var peers []Peer
+	if len(t.AnnounceList) == 0 {
+		peers, err := t.requestPeers(t.Announce, peerID, Port)
+		if err != nil {
+			return peers, err
+		}
+		return peers, nil
+	}
+
+	for _, announce := range t.AnnounceList {
+		newPeers, err := t.requestPeers(announce[0], peerID, Port)
+		if err != nil {
+			continue
+		}
+		peers = append(peers, newPeers...)
+	}
+
+	if len(peers) == 0 {
+		return peers, fmt.Errorf("Failed to connect to trackers\n")
+	}
+	return peers, nil
+}
+
+func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16) (string, error) {
 	base, err := url.Parse(announce)
 	if err != nil {
 		return "", err
@@ -62,7 +96,7 @@ func (t *TorrentInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 	return base.String(), nil
 }
 
-func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
+func (t *TrackerInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	url, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
@@ -87,7 +121,7 @@ func (t *TorrentInfo) requestPeers(announce string, peerID [20]byte, port uint16
 	return peers, nil
 }
 
-func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
+func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	url, err := t.buildTrackerURL(announce, peerID, port)
 	if err != nil {
 		return nil, err
@@ -110,7 +144,7 @@ func (t *TorrentInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 	return unmarshalPeers([]byte(trackerResp.Peers))
 }
 
-func (t *TorrentInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
+func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
 	address, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
