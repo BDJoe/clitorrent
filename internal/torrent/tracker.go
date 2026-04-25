@@ -160,6 +160,7 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	if err != nil {
 		return nil, err
 	}
+	defer conn.Close()
 	req, err := createConnectionReq()
 	if err != nil {
 		return nil, err
@@ -181,8 +182,6 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	_ = binary.BigEndian.Uint32(buf)
 	transId := binary.BigEndian.Uint32(buf[4:])
 	connId := binary.BigEndian.Uint64(buf[8:])
-
-	//fmt.Printf("n: %v, action: % x, received tid: % x, conn Id: % x\n", n, action, transId, connId)
 
 	r := AnnounceRequest{
 		InfoHash:      t.InfoHash,

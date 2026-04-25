@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"time"
 )
 
 type messageID uint8
@@ -18,6 +20,7 @@ const (
 	MsgRequest       messageID = 6
 	MsgPiece         messageID = 7
 	MsgCancel        messageID = 8
+	MsgExtended      messageID = 20
 )
 
 // Message stores ID and payload of a message
@@ -93,10 +96,21 @@ func (m *Message) Serialize() []byte {
 	return buf
 }
 
+func sendMessage(c *Client, msg []byte) error {
+	_, err := c.Conn.Write(msg)
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // readMessage parses a message from a stream. Returns 'nil' on keep-alive message
-func readMessage(r io.Reader) (*Message, error) {
+func readMessage(c net.Conn, timeout time.Duration) (*Message, error) {
 	lengthBuf := make([]byte, 4)
-	_, err := io.ReadFull(r, lengthBuf)
+	c.SetReadDeadline(time.Now().Add(timeout))
+	defer c.SetReadDeadline(time.Time{})
+	_, err := io.ReadFull(c, lengthBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +122,7 @@ func readMessage(r io.Reader) (*Message, error) {
 	}
 
 	messageBuf := make([]byte, length)
-	_, err = io.ReadFull(r, messageBuf)
+	_, err = io.ReadFull(c, messageBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -144,6 +158,8 @@ func (m *Message) name() string {
 		return "Piece"
 	case MsgCancel:
 		return "Cancel"
+	case MsgExtended:
+		return "Extended"
 	default:
 		return fmt.Sprintf("Unknown#%d", m.ID)
 	}

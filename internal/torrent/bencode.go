@@ -3,6 +3,7 @@ package torrent
 import (
 	"bytes"
 	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
 	"os"
 
@@ -12,6 +13,17 @@ import (
 type bencodeCache struct {
 	DataPath   string `bencode:"data-path"`
 	PiecesDone []int  `bencode:"pieces-done"`
+}
+
+type bencodeExtensionHandshake struct {
+	M            map[string]interface{} `bencode:"m"`
+	MetadataSize int                    `bencode:"metadata_size"`
+}
+
+type bencodeExtensionMessage struct {
+	MsgType   int `bencode:"msg_type"`
+	Piece     int `bencode:"piece"`
+	TotalSize int `bencode:"total_size"`
 }
 
 type bencodeInfoBase struct {
@@ -47,6 +59,68 @@ type bencodeTorrentFile struct {
 	Info         bencodeInfoBase `bencode:"info"`
 }
 
+func serializeExtensionHandshake() []byte {
+	m := bencodeExtensionHandshake{M: map[string]interface{}{"ut_metadata": 3}}
+	b := new(bytes.Buffer)
+	err := bencode.Marshal(b, m)
+	if err != nil {
+		return nil
+	}
+	length := len(b.Bytes()) + 2
+	buf := make([]byte, 0, length+4)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(length))
+	buf = append(buf, 20)
+	buf = append(buf, 0)
+	buf = append(buf, b.Bytes()...)
+	return buf
+}
+
+func serializeExtensionMessage(m MetadataExtensionMessage) []byte {
+	msg := bencodeExtensionMessage{MsgType: m.MsgType, Piece: m.Piece}
+	if m.MsgType == 1 {
+		msg.TotalSize = m.TotalSize
+	}
+	msgId := m.ExtensionMessageID.MsgId
+	b := new(bytes.Buffer)
+	err := bencode.Marshal(b, m)
+	if err != nil {
+		fmt.Printf("Error serializing extension message: %v\n", err)
+		return nil
+	}
+	length := len(b.Bytes()) + 2
+	buf := make([]byte, 0, length+4)
+	buf = binary.BigEndian.AppendUint32(buf, uint32(length))
+	buf = append(buf, 20)
+	buf = append(buf, byte(msgId))
+	buf = append(buf, b.Bytes()...)
+	fmt.Println(string(buf))
+	return buf
+}
+
+func parseExtensionHandshake(data []byte) (*bencodeExtensionHandshake, error) {
+	message := bencodeExtensionHandshake{}
+	buf := bytes.NewReader(data)
+	err := bencode.Unmarshal(buf, &message)
+	if err != nil {
+		return nil, err
+	}
+	return &message, nil
+}
+
+func parseExtensionMessage(data []byte) (*MetadataExtensionMessage, error) {
+	message := bencodeExtensionMessage{}
+	buf := bytes.NewReader(data)
+	err := bencode.Unmarshal(buf, &message)
+	if err != nil {
+		return nil, err
+	}
+
+	ext := MetadataExtensionMessage{MsgType: message.MsgType, Piece: message.Piece, TotalSize: message.TotalSize}
+	length := serializeExtensionMessage(ext)
+	ext.MetadataChunk = data[len(length):]
+	return &ext, nil
+}
+
 func getCacheFile(path string) (string, []int, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -60,6 +134,16 @@ func getCacheFile(path string) (string, []int, error) {
 	}
 
 	return bc.DataPath, bc.PiecesDone, nil
+}
+
+func ParseTorrentMagnet(b []byte) (TorrentInfo, error) {
+	bto := bencodeTorrentFile{}
+	buf := bytes.NewReader(b)
+	err := bencode.Unmarshal(buf, &bto)
+	if err != nil {
+		return TorrentInfo{}, err
+	}
+	return bto.toTorrentInfo()
 }
 
 func ParseTorrentFile(file *os.File) (TorrentInfo, error) {

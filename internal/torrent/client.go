@@ -2,8 +2,10 @@ package torrent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -12,6 +14,8 @@ type Client struct {
 	Conn     net.Conn
 	Choked   bool
 	Bitfield Bitfield
+	Extension
+	Metadata
 	peer     Peer
 	infoHash [20]byte
 	peerID   [20]byte
@@ -38,11 +42,40 @@ func completeHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, er
 	return res, nil
 }
 
+func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, error) {
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	defer conn.SetDeadline((time.Time{})) // Disable the deadline
+
+	req := newHandshake(infohash, peerID)
+	_, err := conn.Write(req.SerializeMagnetHandshake())
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := readHandshake(conn)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(res.InfoHash[:], infohash[:]) {
+		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, infohash)
+	}
+
+	if res.HasExtensions {
+		m := serializeExtensionHandshake()
+		_, err := conn.Write(m)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return res, nil
+}
+
 func recvBitfield(conn net.Conn) (Bitfield, error) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	defer conn.SetDeadline(time.Time{}) // Disable the deadline
 
-	msg, err := readMessage(conn)
+	msg, err := readMessage(conn, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -88,10 +121,87 @@ func newClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	}, nil
 }
 
+// New connects with a peer, completes a handshake, and receives a handshake
+// returns an err if any of those fail
+func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
+	conn, err := net.DialTimeout("tcp", peer.String(), 1*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = completeMagnetHandshake(conn, infoHash, peerID)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	//bf, err := recvBitfield(conn)
+	//if err != nil {
+	//	conn.Close()
+	//	return nil, err
+	//}
+
+	return &Client{
+		Conn:     conn,
+		Choked:   true,
+		peer:     peer,
+		infoHash: infoHash,
+		peerID:   peerID,
+	}, nil
+}
+
 // Read reads and consumes a message from the connection
 func (c *Client) Read() (*Message, error) {
-	msg, err := readMessage(c.Conn)
+	msg, err := readMessage(c.Conn, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	return msg, err
+}
+
+// ReadMessages reads and consumes a message from the connection
+func (c *Client) ReadMessages() error {
+	for {
+		msg, err := readMessage(c.Conn, 1*time.Second)
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil
+			}
+			fmt.Println("error reading message:", err)
+			return err
+		}
+		err = c.handleMessage(msg)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) handleMessage(msg *Message) error {
+	if msg == nil { // keep-alive
+		return nil
+	}
+
+	switch msg.ID {
+	case MsgUnchoke:
+		c.Choked = false
+	case MsgChoke:
+		c.Choked = true
+	case MsgHave:
+		index, err := parseHave(msg)
+		if err != nil {
+			return err
+		}
+		c.Bitfield.SetPiece(index)
+	case MsgBitfield:
+		c.Bitfield = msg.Payload
+	case MsgExtended:
+		c.handleExtension(msg.Payload)
+	default:
+		return fmt.Errorf("unrecognized message ID %d", msg.ID)
+	}
+	return nil
 }
 
 // SendRequest sends a Request message to the peer
