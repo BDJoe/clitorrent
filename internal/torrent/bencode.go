@@ -20,10 +20,16 @@ type bencodeExtensionHandshake struct {
 	MetadataSize int                    `bencode:"metadata_size"`
 }
 
-type bencodeExtensionMessage struct {
+type bencodeExtensionData struct {
 	MsgType   int `bencode:"msg_type"`
 	Piece     int `bencode:"piece"`
 	TotalSize int `bencode:"total_size"`
+	//Data      bencodeInfoBase
+}
+
+type bencodeExtensionRequest struct {
+	MsgType int `bencode:"msg_type"`
+	Piece   int `bencode:"piece"`
 }
 
 type bencodeInfoBase struct {
@@ -59,6 +65,19 @@ type bencodeTorrentFile struct {
 	Info         bencodeInfoBase `bencode:"info"`
 }
 
+//func Unmarshal(b []byte) (*Message, error) {
+//	switch firstChar := b[0]; {
+//	case firstChar == 'i':
+//		return unmarshalInteger(b)
+//	case firstChar >= '0' && firstChar <= '9':
+//		return unmarshalstring(b)
+//	case firstChar == 'd':
+//		return unmarshalDict(b)
+//	case firstChar == 'l':
+//		return unmarshalList(b)
+//	}
+//}
+
 func serializeExtensionHandshake() []byte {
 	m := bencodeExtensionHandshake{M: map[string]interface{}{"ut_metadata": 3}}
 	b := new(bytes.Buffer)
@@ -76,13 +95,16 @@ func serializeExtensionHandshake() []byte {
 }
 
 func serializeExtensionMessage(m MetadataExtensionMessage) []byte {
-	msg := bencodeExtensionMessage{MsgType: m.MsgType, Piece: m.Piece}
+	var msg any
+
 	if m.MsgType == 1 {
-		msg.TotalSize = m.TotalSize
+		msg = bencodeExtensionData{MsgType: m.MsgType, Piece: m.Piece, TotalSize: m.TotalSize}
+	} else {
+		msg = bencodeExtensionRequest{MsgType: m.MsgType, Piece: m.Piece}
 	}
 	msgId := m.ExtensionMessageID.MsgId
 	b := new(bytes.Buffer)
-	err := bencode.Marshal(b, m)
+	err := bencode.Marshal(b, msg)
 	if err != nil {
 		fmt.Printf("Error serializing extension message: %v\n", err)
 		return nil
@@ -93,7 +115,6 @@ func serializeExtensionMessage(m MetadataExtensionMessage) []byte {
 	buf = append(buf, 20)
 	buf = append(buf, byte(msgId))
 	buf = append(buf, b.Bytes()...)
-	fmt.Println(string(buf))
 	return buf
 }
 
@@ -108,16 +129,20 @@ func parseExtensionHandshake(data []byte) (*bencodeExtensionHandshake, error) {
 }
 
 func parseExtensionMessage(data []byte) (*MetadataExtensionMessage, error) {
-	message := bencodeExtensionMessage{}
+	message := bencodeExtensionData{}
 	buf := bytes.NewReader(data)
 	err := bencode.Unmarshal(buf, &message)
 	if err != nil {
 		return nil, err
 	}
+	msgBuf := new(bytes.Buffer)
+	err = bencode.Marshal(msgBuf, message)
+	if err != nil {
+		return nil, fmt.Errorf("Error serializing extension message: %v\n", err)
+	}
+	chunk := data[msgBuf.Len():]
 
-	ext := MetadataExtensionMessage{MsgType: message.MsgType, Piece: message.Piece, TotalSize: message.TotalSize}
-	length := serializeExtensionMessage(ext)
-	ext.MetadataChunk = data[len(length):]
+	ext := MetadataExtensionMessage{MsgType: message.MsgType, Piece: message.Piece, TotalSize: message.TotalSize, MetadataChunk: chunk}
 	return &ext, nil
 }
 

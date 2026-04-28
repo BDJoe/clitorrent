@@ -142,7 +142,7 @@ func initModel() model {
 
 	//progress := progress.New(progress.WithDefaultBlend())
 
-	m.choices = []string{"downloads", "new", "exit"}
+	m.choices = []string{"downloads", "new", "magnet", "exit"}
 	m.menuIndex = 1
 	m.downloadIndex = 0
 	torrents, err := getCache()
@@ -265,17 +265,20 @@ func (m model) View() tea.View {
 	styles := m.styles(m.hasDarkBg)
 
 	addButton := styles.blurredButton("Add Torrent")
+	magnetButton := styles.blurredButton("Add Magnet Link")
 	exitButton := styles.blurredButton("Exit")
 	switch m.choices[m.menuIndex] {
 	case "new":
 		addButton = styles.focusedButton("Add Torrent")
+	case "magnet":
+		magnetButton = styles.focusedButton("Add Magnet Link")
 	case "exit":
 		exitButton = styles.focusedButton("Exit")
 	}
 
 	body := downloadView(m)
 
-	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, addButton, exitButton)
+	footer := lipgloss.JoinHorizontal(lipgloss.Bottom, addButton, magnetButton, exitButton)
 	s := lipgloss.JoinVertical(lipgloss.Top, styles.Header, styles.BorderStyle.Width(m.width).Render(body), footer)
 
 	if m.state == uiForm {
@@ -397,6 +400,13 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd = func() tea.Msg { return tea.RequestWindowSize() }
 					m.state = uiForm
 					return m, cmd
+				case "magnet":
+					var cmd tea.Cmd
+					torrent := torrentModel{SavePath: "/home/joe/Downloads/", FilePath: ""}
+					torrent.initTorrent()
+					m.torrents = append(m.torrents, &torrent)
+					torrent.openMagnet()
+					return m, cmd
 				case "exit":
 					return m, tea.Quit
 				}
@@ -499,6 +509,15 @@ func (t *torrentModel) torrentView(m model, i int) string {
 
 func (t *torrentModel) openFile() tea.Msg {
 	tf, err := session.OpenTorrent(t.FilePath, t.SavePath)
+	if err != nil {
+		return tea.Quit()
+	}
+	t.Torrent = tf
+	return t
+}
+
+func (t *torrentModel) openMagnet() tea.Msg {
+	tf, err := session.OpenMagnet(session.MagnetLink, t.SavePath)
 	if err != nil {
 		return tea.Quit()
 	}

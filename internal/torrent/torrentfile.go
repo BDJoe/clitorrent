@@ -54,6 +54,22 @@ func OpenTorrent(filePath string, downloadPath string) (*Session, error) {
 	return &session, nil
 }
 
+func OpenMagnet(link string, downloadPath string) (*Session, error) {
+	info, err := GetMetadata(link)
+	if err != nil {
+		return &Session{}, err
+	}
+	session, err := createSession(info, downloadPath)
+	if err != nil {
+		return &session, err
+	}
+	err = session.initFile()
+	if err != nil {
+		return &session, err
+	}
+	return &session, nil
+}
+
 func createCache(filePath string, downloadPath string) error {
 	cache, err := os.UserCacheDir()
 	if err != nil {

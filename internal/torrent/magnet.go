@@ -18,11 +18,11 @@ type Magnet struct {
 	Name     string
 }
 
-const magnetLink = "magnet:?xt=urn:btih:7e0636e1b0a6e32955082b37f3db10d6a953a5a3&dn=Dungeon%20Crawler%20Carl%20-%20Book%201%20-%20Matt%20Dinniman&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.open-internet.nl%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A69691337%2Fannounce&tr=udp%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce&tr=http%3A%2F%2Ftracker.baravik.org%3A6970%2Fannounce&tr=http%3A%2F%2Fretracker.telecom.by%3A80%2Fannounce&tr=http%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce"
+const MagnetLink = "magnet:?xt=urn:btih:7e0636e1b0a6e32955082b37f3db10d6a953a5a3&dn=Dungeon%20Crawler%20Carl%20-%20Book%201%20-%20Matt%20Dinniman&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.open-internet.nl%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A69691337%2Fannounce&tr=udp%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce&tr=http%3A%2F%2Ftracker.baravik.org%3A6970%2Fannounce&tr=http%3A%2F%2Fretracker.telecom.by%3A80%2Fannounce&tr=http%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce"
 
-func ParseMagnetLink() (Magnet, error) {
+func ParseMagnetLink(magnet string) (Magnet, error) {
 	var mag Magnet
-	link, err := url.Parse(magnetLink)
+	link, err := url.Parse(magnet)
 	if err != nil {
 		return mag, err
 	}
@@ -63,8 +63,8 @@ func ParseMagnetLink() (Magnet, error) {
 	return mag, nil
 }
 
-func GetMetadata() (*TorrentInfo, error) {
-	mag, err := ParseMagnetLink()
+func GetMetadata(link string) (*TorrentInfo, error) {
+	mag, err := ParseMagnetLink(link)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 
 			err = c.ReadMessages()
 			if err != nil {
-				log.Printf("%s\n", err)
+				log.Printf("error reading message from magnet:%s\n", err)
 				break
 			}
 			continue
@@ -123,14 +123,13 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 		log.Printf("error getting metadata: %s\n", err)
 	}
 
-	metadatahash := sha1.Sum(metadata)
+	metadataHash := sha1.Sum(metadata)
 
-	if !bytes.Equal(metadatahash[:], infoHash[:]) {
-		fmt.Printf("The fetched metadata hash doesn't match info hash")
+	if !bytes.Equal(metadataHash[:], infoHash[:]) {
+		fmt.Printf("The fetched metadata hash doesn't match info hash\n")
 		return nil
 	}
 
-	fmt.Printf("Got metadata: %d\n", len(metadata))
 	info, err := ParseTorrentMagnet(metadata)
 	if err != nil {
 		log.Printf("error parsing info: %s\n", err)

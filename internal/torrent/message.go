@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
 	"time"
 )
 
@@ -106,11 +105,11 @@ func sendMessage(c *Client, msg []byte) error {
 }
 
 // readMessage parses a message from a stream. Returns 'nil' on keep-alive message
-func readMessage(c net.Conn, timeout time.Duration) (*Message, error) {
+func readMessage(c *Client, timeout time.Duration) (*Message, error) {
 	lengthBuf := make([]byte, 4)
-	c.SetReadDeadline(time.Now().Add(timeout))
-	defer c.SetReadDeadline(time.Time{})
-	_, err := io.ReadFull(c, lengthBuf)
+	c.Conn.SetReadDeadline(time.Now().Add(timeout))
+	defer c.Conn.SetReadDeadline(time.Time{})
+	_, err := io.ReadFull(c.Conn, lengthBuf)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +121,7 @@ func readMessage(c net.Conn, timeout time.Duration) (*Message, error) {
 	}
 
 	messageBuf := make([]byte, length)
-	_, err = io.ReadFull(c, messageBuf)
+	_, err = io.ReadFull(c.Conn, messageBuf)
 	if err != nil {
 		return nil, err
 	}

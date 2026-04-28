@@ -71,24 +71,24 @@ func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handsha
 	return res, nil
 }
 
-func recvBitfield(conn net.Conn) (Bitfield, error) {
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	defer conn.SetDeadline(time.Time{}) // Disable the deadline
+func (c *Client) recvBitfield() error {
+	c.Conn.SetDeadline(time.Now().Add(5 * time.Second))
+	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
-	msg, err := readMessage(conn, 5*time.Second)
+	msg, err := readMessage(c, 5*time.Second)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if msg == nil {
 		err := fmt.Errorf("Expected bitfield but got %s", msg)
-		return nil, err
+		return err
 	}
 	if msg.ID != MsgBitfield {
 		err := fmt.Errorf("Expected bitfield but got ID %d", msg.ID)
-		return nil, err
+		return err
 	}
-
-	return msg.Payload, nil
+	c.Bitfield = msg.Payload
+	return nil
 }
 
 // New connects with a peer, completes a handshake, and receives a handshake
@@ -98,27 +98,26 @@ func newClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	_, err = completeHandshake(conn, infoHash, peerID)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	bf, err := recvBitfield(conn)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-
-	return &Client{
+	client := Client{
 		Conn:     conn,
 		Choked:   true,
-		Bitfield: bf,
 		peer:     peer,
 		infoHash: infoHash,
 		peerID:   peerID,
-	}, nil
+	}
+	_, err = completeHandshake(client.Conn, infoHash, peerID)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	err = client.recvBitfield()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return &client, nil
 }
 
 // New connects with a peer, completes a handshake, and receives a handshake
@@ -128,8 +127,14 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	_, err = completeMagnetHandshake(conn, infoHash, peerID)
+	client := Client{
+		Conn:     conn,
+		Choked:   true,
+		peer:     peer,
+		infoHash: infoHash,
+		peerID:   peerID,
+	}
+	_, err = completeMagnetHandshake(client.Conn, infoHash, peerID)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -141,18 +146,12 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	//	return nil, err
 	//}
 
-	return &Client{
-		Conn:     conn,
-		Choked:   true,
-		peer:     peer,
-		infoHash: infoHash,
-		peerID:   peerID,
-	}, nil
+	return &client, nil
 }
 
 // Read reads and consumes a message from the connection
 func (c *Client) Read() (*Message, error) {
-	msg, err := readMessage(c.Conn, 5*time.Second)
+	msg, err := readMessage(c, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +161,12 @@ func (c *Client) Read() (*Message, error) {
 // ReadMessages reads and consumes a message from the connection
 func (c *Client) ReadMessages() error {
 	for {
-		msg, err := readMessage(c.Conn, 1*time.Second)
+		msg, err := readMessage(c, 1*time.Second)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				return nil
 			}
-			fmt.Println("error reading message:", err)
+			fmt.Println("error reading messages:", err)
 			return err
 		}
 		err = c.handleMessage(msg)
