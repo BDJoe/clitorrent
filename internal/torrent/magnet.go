@@ -6,7 +6,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log"
 	"net/url"
 	"strings"
@@ -63,7 +62,7 @@ func ParseMagnetLink(magnet string) (Magnet, error) {
 	return mag, nil
 }
 
-func GetMetadata(link string) (*TorrentInfo, error) {
+func OpenMagnet(link string, downloadPath string) (*Session, error) {
 	mag, err := ParseMagnetLink(link)
 	if err != nil {
 		return nil, err
@@ -74,13 +73,37 @@ func GetMetadata(link string) (*TorrentInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	track := TrackerInfo{InfoHash: mag.InfoHash, AnnounceList: mag.Trackers}
+	track := TrackerInfo{Announce: "", AnnounceList: mag.Trackers, InfoHash: mag.InfoHash}
 	peers, err := GetPeers(&track, peerID)
 	if err != nil {
 		return nil, err
 	}
+
+	t, err := GetMetadata(peers, peerID, mag.InfoHash)
+	if err != nil {
+		return &Session{}, err
+	}
+	session := Session{
+		TrackerInfo: track,
+		Peers:       peers,
+		PeerID:      peerID,
+		PieceHashes: t.PieceHashes,
+		PieceLength: t.PieceLength,
+		Length:      t.Length,
+		Name:        t.Name,
+		Files:       t.Files,
+		Path:        downloadPath,
+	}
+	err = session.initFile()
+	if err != nil {
+		return &session, err
+	}
+	return &session, nil
+}
+
+func GetMetadata(peers []Peer, peerID [20]byte, infoHash [20]byte) (*TorrentInfo, error) {
 	for _, peer := range peers {
-		info := GetMetadataFromPeer(peer, peerID, mag.InfoHash)
+		info := GetMetadataFromPeer(peer, peerID, infoHash)
 		if info != nil {
 			return info, nil
 		}
@@ -92,7 +115,6 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 	c, err :=
 		newMagnetClient(peer, peerId, infoHash)
 	if err != nil {
-		log.Printf("Could not handshake with %s. %s\n", peer.IP, err)
 		return nil
 	}
 	defer c.Conn.Close()
@@ -110,7 +132,6 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 
 			err = c.ReadMessages()
 			if err != nil {
-				log.Printf("error reading message from magnet:%s\n", err)
 				break
 			}
 			continue
@@ -120,19 +141,18 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 
 	metadata, err := c.getMetadata()
 	if err != nil {
-		log.Printf("error getting metadata: %s\n", err)
+		return nil
 	}
 
 	metadataHash := sha1.Sum(metadata)
 
 	if !bytes.Equal(metadataHash[:], infoHash[:]) {
-		fmt.Printf("The fetched metadata hash doesn't match info hash\n")
 		return nil
 	}
 
 	info, err := ParseTorrentMagnet(metadata)
 	if err != nil {
-		log.Printf("error parsing info: %s\n", err)
+		return nil
 	}
 	return &info
 }

@@ -2,8 +2,6 @@ package torrent
 
 import (
 	"errors"
-	"fmt"
-	"log"
 	"math"
 )
 
@@ -38,7 +36,7 @@ func (c *Client) handleExtension(buf []byte) {
 	if buf[0] == 0 {
 		msg, err := parseExtensionHandshake(buf[1:])
 		if err != nil {
-			log.Printf("error parsing handshake: %s\n", err)
+			//log.Printf("error parsing handshake: %s\n", err)
 			return
 		}
 		for ext, msgId := range msg.M {
@@ -50,15 +48,14 @@ func (c *Client) handleExtension(buf []byte) {
 	if buf[0] == 3 {
 		msg, err := parseExtensionMessage(buf[1:])
 		if err != nil {
-			log.Printf("error parsing metadata message: %s\n", err)
+			//log.Printf("error parsing metadata message: %s\n", err)
 			return
 		}
 		if msg.MsgType == 1 {
 			copy(c.Metadata.Metadata[msg.Piece*MetadataPieceSize:], msg.MetadataChunk)
 			c.PiecesReceived++
-			fmt.Printf("Piece Size: %d\n", len(msg.MetadataChunk))
 		} else {
-			fmt.Printf("Metadata message: %+v", msg)
+			return
 		}
 	}
 }
@@ -72,24 +69,23 @@ func (c *Client) getMetadata() ([]byte, error) {
 	numPieces := int(math.Ceil(float64(c.Extension.MetaDataSize) / float64(MetadataPieceSize)))
 
 	for i := 0; i < numPieces; i++ {
-		fmt.Printf("num pieces: %d, piece: %d\n", numPieces, i)
 		requestMsg := MetadataExtensionMessage{ExtensionMessageID: ExtensionMessageID{MsgId: id}, MsgType: 0, Piece: i}
 		encoded := serializeExtensionMessage(requestMsg)
-		fmt.Printf("encoded: %s\n", encoded)
+
 		err := sendMessage(c, encoded)
 		if err != nil {
-			fmt.Printf("error sending metadata message: %s\n", err)
+			//fmt.Printf("error sending metadata message: %s\n", err)
 			return nil, err
 		}
 		for c.PiecesReceived <= i {
 			msg, err := c.Read()
 			if err != nil {
-				fmt.Printf("error reading message from extension: %s\n", err)
+				//fmt.Printf("error reading message from extension: %s\n", err)
 				return nil, err
 			}
 			err = c.handleMessage(msg)
 			if err != nil {
-				fmt.Printf("error handling message: %s\n", err)
+				//fmt.Printf("error handling message: %s\n", err)
 				return nil, err
 			}
 		}

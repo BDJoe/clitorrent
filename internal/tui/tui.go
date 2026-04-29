@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -153,7 +154,7 @@ func initModel() model {
 	return m
 }
 
-func newForm() *huh.Form {
+func newFileForm() *huh.Form {
 	p, _ := os.UserHomeDir()
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -171,6 +172,27 @@ func newForm() *huh.Form {
 				Description("Select a .torrent file").
 				AllowedTypes([]string{".torrent"}).
 				CurrentDirectory(p),
+		),
+	)
+	form.Init()
+	return form
+}
+
+func newMagnetForm() *huh.Form {
+	p, _ := os.UserHomeDir()
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewFilePicker().
+				Key("path").
+				Title("Download Location").
+				Description("Select a save location").
+				DirAllowed(true).
+				FileAllowed(false).
+				CurrentDirectory(p),
+
+			huh.NewInput().
+				Key("file").
+				Title("Magnet Link"),
 		),
 	)
 	form.Init()
@@ -325,10 +347,15 @@ func formUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 		torrent := torrentModel{SavePath: path, FilePath: file}
 		torrent.initTorrent()
 		m.torrents = append(m.torrents, &torrent)
-		torrent.openFile()
-		prog := torrent.Progress.SetPercent(float64(len(torrent.Torrent.PiecesDone)) / float64(len(torrent.Torrent.PieceHashes)))
-		cmds = append(cmds, prog)
-		torrent.createCacheTorrent()
+		if strings.HasPrefix(file, "magnet") {
+			go torrent.openMagnet()
+		} else {
+			go torrent.openFile()
+		}
+
+		//prog := torrent.Progress.SetPercent(float64(len(torrent.Torrent.PiecesDone)) / float64(len(torrent.Torrent.PieceHashes)))
+		cmds = append(cmds, tea.RequestWindowSize)
+		//torrent.createCacheTorrent()
 		m.state = uiMain
 	}
 
@@ -396,16 +423,15 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.choices[m.menuIndex] {
 				case "new":
 					var cmd tea.Cmd
-					m.form = newForm()
+					m.form = newFileForm()
 					cmd = func() tea.Msg { return tea.RequestWindowSize() }
 					m.state = uiForm
 					return m, cmd
 				case "magnet":
 					var cmd tea.Cmd
-					torrent := torrentModel{SavePath: "/home/joe/Downloads/", FilePath: ""}
-					torrent.initTorrent()
-					m.torrents = append(m.torrents, &torrent)
-					torrent.openMagnet()
+					m.form = newMagnetForm()
+					cmd = func() tea.Msg { return tea.RequestWindowSize() }
+					m.state = uiForm
 					return m, cmd
 				case "exit":
 					return m, tea.Quit
@@ -423,12 +449,12 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if s == "left" {
-				if m.menuIndex == 2 {
+				if m.menuIndex > 1 {
 					m.menuIndex--
 				}
 			}
 			if s == "right" {
-				if m.menuIndex == 1 {
+				if m.menuIndex > 0 && m.menuIndex < len(m.choices)-1 {
 					m.menuIndex++
 				}
 			}
@@ -496,7 +522,13 @@ func (t *torrentModel) torrentView(m model, i int) string {
 	if m.menuIndex == 0 && i == m.downloadIndex {
 		button = styles.focusedButton("Start")
 	}
-	info := lipgloss.JoinHorizontal(lipgloss.Top, t.Torrent.Name, "    ", button)
+	var name string
+	if t.Torrent != nil {
+		name = t.Torrent.Name
+	} else {
+		name = "Loading Metadata"
+	}
+	info := lipgloss.JoinHorizontal(lipgloss.Top, name, "    ", button)
 	if len(t.Err) > 0 {
 		err := styles.ErrorHeaderText.Render(t.Err)
 		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView(), err)
@@ -517,7 +549,7 @@ func (t *torrentModel) openFile() tea.Msg {
 }
 
 func (t *torrentModel) openMagnet() tea.Msg {
-	tf, err := session.OpenMagnet(session.MagnetLink, t.SavePath)
+	tf, err := session.OpenMagnet(t.FilePath, t.SavePath)
 	if err != nil {
 		return tea.Quit()
 	}
@@ -584,7 +616,7 @@ func getCache() ([]*torrentModel, error) {
 func (t *torrentModel) downloadFile(m model, id int) tea.Msg {
 	t.State = torrentStarted
 	go func() {
-		err := t.Torrent.StartDownload(t.SavePath, m.program, id)
+		err := t.Torrent.StartDownload(m.program, id)
 		if err != nil {
 			t.Status = err.Error()
 		}

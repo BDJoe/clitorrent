@@ -163,11 +163,13 @@ func getCacheFile(path string) (string, []int, error) {
 
 func ParseTorrentMagnet(b []byte) (TorrentInfo, error) {
 	bto := bencodeTorrentFile{}
+	info := bencodeInfoBase{}
 	buf := bytes.NewReader(b)
-	err := bencode.Unmarshal(buf, &bto)
+	err := bencode.Unmarshal(buf, &info)
 	if err != nil {
 		return TorrentInfo{}, err
 	}
+	bto.Info = info
 	return bto.toTorrentInfo()
 }
 

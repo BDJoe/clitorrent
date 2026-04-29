@@ -191,15 +191,18 @@ func (t *Session) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-func (t *Session) StartDownload(path string, program *tea.Program, id int) error {
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
+func (t *Session) StartDownload(program *tea.Program, id int) error {
+	if len(t.Peers) == 0 {
+		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
 
-	peers, err := GetPeers(&t.TrackerInfo, t.PeerID)
-	if err != nil {
-		return err
+		peers, err := GetPeers(&t.TrackerInfo, t.PeerID)
+		if err != nil {
+			return err
+		}
+		t.Peers = peers
 	}
-	t.Peers = peers
-	err = t.Download(program, id)
+
+	err := t.Download(program, id)
 	if err != nil {
 		return err
 	}
@@ -267,11 +270,13 @@ func (t *Session) initFile() error {
 	var err error
 	if len(t.Files) > 0 {
 		buf, err = t.initMultiFile()
+		fmt.Println("Init Multi File")
 		if err != nil {
 			return err
 		}
 	} else {
 		buf, err = t.initSingleFile()
+		fmt.Println("Init Single File")
 		if err != nil {
 			return err
 		}
