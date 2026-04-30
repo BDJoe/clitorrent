@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/jackpal/bencode-go"
 )
 
@@ -27,7 +28,7 @@ type TorrentFile struct {
 }
 
 // OpenTorrent parses a torrent file
-func OpenTorrent(filePath string, downloadPath string) (*Session, error) {
+func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id int) (*Session, error) {
 	file, err := os.Open(filePath)
 	var session Session
 	if err != nil {
@@ -51,6 +52,8 @@ func OpenTorrent(filePath string, downloadPath string) (*Session, error) {
 	if err != nil {
 		return &session, err
 	}
+	session.Tui = program
+	session.TorrentID = id
 	return &session, nil
 }
 
@@ -78,36 +81,36 @@ func createCache(filePath string, downloadPath string) error {
 	return nil
 }
 
-func GetCachedTorrents() ([]*Session, error) {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(cache, "cliTorrent")
-	if !util.Exists(path) {
-		return nil, err
-	}
-	files, err := os.ReadDir(path)
-	if err != nil {
-		return nil, err
-	}
-	var torrents []*Session
-	for _, file := range files {
-		if !strings.Contains(file.Name(), ".temp") {
-			continue
-		}
-		name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
-		dataPath, _, err := getCacheFile(filepath.Join(path, file.Name()))
-		session, err := OpenTorrent(filepath.Join(path, name+".torrent"), dataPath)
-		if err != nil {
-			continue
-		}
-
-		torrents = append(torrents, session)
-	}
-
-	return torrents, nil
-}
+//func GetCachedTorrents() ([]*Session, error) {
+//	cache, err := os.UserCacheDir()
+//	if err != nil {
+//		return nil, err
+//	}
+//	path := filepath.Join(cache, "cliTorrent")
+//	if !util.Exists(path) {
+//		return nil, err
+//	}
+//	files, err := os.ReadDir(path)
+//	if err != nil {
+//		return nil, err
+//	}
+//	var torrents []*Session
+//	for _, file := range files {
+//		if !strings.Contains(file.Name(), ".temp") {
+//			continue
+//		}
+//		name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
+//		dataPath, _, err := getCacheFile(filepath.Join(path, file.Name()))
+//		session, err := OpenTorrent(filepath.Join(path, name+".torrent"), dataPath)
+//		if err != nil {
+//			continue
+//		}
+//
+//		torrents = append(torrents, session)
+//	}
+//
+//	return torrents, nil
+//}
 
 func createSession(t *TorrentInfo, downloadPath string) (Session, error) {
 	var peerID [20]byte

@@ -5,6 +5,14 @@ import (
 	"os"
 )
 
+type MessageType int
+
+const (
+	MsgProgress MessageType = 0
+	MsgStatus   MessageType = 1
+	MsgError    MessageType = 2
+)
+
 type ProgressMsg struct {
 	TorrentId int
 	Progress  float64

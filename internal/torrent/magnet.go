@@ -6,9 +6,12 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"gotorrent/internal/util"
 	"log"
 	"net/url"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 type Magnet struct {
@@ -62,7 +65,8 @@ func ParseMagnetLink(magnet string) (Magnet, error) {
 	return mag, nil
 }
 
-func OpenMagnet(link string, downloadPath string) (*Session, error) {
+func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) (*Session, error) {
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Initializing Torrent"})
 	mag, err := ParseMagnetLink(link)
 	if err != nil {
 		return nil, err
@@ -93,11 +97,14 @@ func OpenMagnet(link string, downloadPath string) (*Session, error) {
 		Name:        t.Name,
 		Files:       t.Files,
 		Path:        downloadPath,
+		Tui:         program,
+		TorrentID:   id,
 	}
 	err = session.initFile()
 	if err != nil {
 		return &session, err
 	}
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return &session, nil
 }
 

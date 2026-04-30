@@ -33,6 +33,8 @@ type Session struct {
 	Files       []TorrentFile
 	Path        string
 	PiecesDone  []int
+	Tui         *tea.Program
+	TorrentID   int
 }
 
 type cache struct {
@@ -139,7 +141,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 	return nil
 }
 
-func (t *Session) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult, program *tea.Program, id int) {
+func (t *Session) startDownloadWorker(peer Peer, workQueue chan *pieceWork, results chan *pieceResult) {
 	c, err := newClient(peer, t.PeerID, t.InfoHash)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
@@ -167,7 +169,7 @@ func (t *Session) startDownloadWorker(peer Peer, workQueue chan *pieceWork, resu
 
 		err = checkIntegrity(pw, buf)
 		if err != nil {
-			program.Send(util.ErrorMsg{TorrentId: id, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
+			t.Tui.Send(util.ErrorMsg{TorrentId: t.TorrentID, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
 			workQueue <- pw
 			continue
 		}
@@ -191,9 +193,9 @@ func (t *Session) calculatePieceSize(index int) int {
 	return end - begin
 }
 
-func (t *Session) StartDownload(program *tea.Program, id int) error {
+func (t *Session) StartDownload() error {
 	if len(t.Peers) == 0 {
-		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
+		t.Tui.Send(util.StatusMsg{TorrentId: t.TorrentID, Status: "Connecting to peers"})
 
 		peers, err := GetPeers(&t.TrackerInfo, t.PeerID)
 		if err != nil {
@@ -202,18 +204,18 @@ func (t *Session) StartDownload(program *tea.Program, id int) error {
 		t.Peers = peers
 	}
 
-	err := t.Download(program, id)
+	err := t.Download()
 	if err != nil {
 		return err
 	}
 
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Download Complete!"})
+	t.Tui.Send(util.StatusMsg{TorrentId: t.TorrentID, Status: "Download Complete!"})
 	return nil
 }
 
-func (t *Session) Download(program *tea.Program, id int) error {
+func (t *Session) Download() error {
 
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
+	t.Tui.Send(util.StatusMsg{TorrentId: t.TorrentID, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
@@ -226,7 +228,7 @@ func (t *Session) Download(program *tea.Program, id int) error {
 
 	// Start workers
 	for _, peer := range t.Peers {
-		go t.startDownloadWorker(peer, workQueue, results, program, id)
+		go t.startDownloadWorker(peer, workQueue, results)
 	}
 
 	// Collect results into a buffer until full
@@ -241,7 +243,7 @@ func (t *Session) Download(program *tea.Program, id int) error {
 		//if err != nil {
 		//	program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
 		//}
-		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(t.PiecesDone), len(t.PieceHashes))})
+		t.Tui.Send(util.ProgressMsg{TorrentId: t.TorrentID, Progress: getCompletePercentage(len(t.PiecesDone), len(t.PieceHashes))})
 	}
 	close(workQueue)
 	return nil
@@ -270,13 +272,11 @@ func (t *Session) initFile() error {
 	var err error
 	if len(t.Files) > 0 {
 		buf, err = t.initMultiFile()
-		fmt.Println("Init Multi File")
 		if err != nil {
 			return err
 		}
 	} else {
 		buf, err = t.initSingleFile()
-		fmt.Println("Init Single File")
 		if err != nil {
 			return err
 		}
