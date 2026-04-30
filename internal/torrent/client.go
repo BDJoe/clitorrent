@@ -16,7 +16,6 @@ type Client struct {
 	Bitfield Bitfield
 	Extension
 	Metadata
-	peer     Peer
 	infoHash [20]byte
 	peerID   [20]byte
 }
@@ -101,7 +100,6 @@ func newClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	client := Client{
 		Conn:     conn,
 		Choked:   true,
-		peer:     peer,
 		infoHash: infoHash,
 		peerID:   peerID,
 	}
@@ -130,7 +128,6 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	client := Client{
 		Conn:     conn,
 		Choked:   true,
-		peer:     peer,
 		infoHash: infoHash,
 		peerID:   peerID,
 	}

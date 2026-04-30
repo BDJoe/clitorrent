@@ -11,6 +11,7 @@ import (
 type Peer struct {
 	IP   net.IP
 	Port uint16
+	*Client
 }
 
 // unmarshalPeers parses peer IP addresses and ports from a buffer
