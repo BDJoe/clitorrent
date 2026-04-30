@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jackpal/bencode-go"
+	tea "charm.land/bubbletea/v2"
 )
 
 type TorrentInfo struct {
@@ -27,34 +27,56 @@ type TorrentFile struct {
 }
 
 // OpenTorrent parses a torrent file
-func OpenTorrent(filePath string, downloadPath string) (*Session, error) {
+func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id int) (*Session, error) {
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Initializing Torrent"})
 	file, err := os.Open(filePath)
-	var session Session
 	if err != nil {
-		return &session, err
+		return nil, err
 	}
 	defer file.Close()
 
 	tf, err := ParseTorrentFile(file)
 	if err != nil {
-		return &session, nil
+		return nil, err
 	}
-	err = createCache(filePath, downloadPath)
+
+	var peerID [20]byte
+	_, err = rand.Read(peerID[:])
 	if err != nil {
-		return &session, err
+		return nil, err
 	}
-	session, err = createSession(&tf, downloadPath)
+	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash}
+	peers, err := GetPeers(&tracker, peerID)
 	if err != nil {
-		return &session, err
+		return nil, err
 	}
+	session := Session{
+		TrackerInfo: tracker,
+		Peers:       peers,
+		PeerID:      peerID,
+		PieceHashes: tf.PieceHashes,
+		PieceLength: tf.PieceLength,
+		Length:      tf.Length,
+		Name:        tf.Name,
+		Files:       tf.Files,
+		Path:        downloadPath,
+		Tui:         program,
+		TorrentID:   id,
+	}
+
 	err = session.initFile()
 	if err != nil {
-		return &session, err
+		return nil, err
 	}
+	err = session.createCache()
+	if err != nil {
+		return nil, err
+	}
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return &session, nil
 }
 
-func createCache(filePath string, downloadPath string) error {
+func (s *Session) createCache() error {
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return err
@@ -63,22 +85,20 @@ func createCache(filePath string, downloadPath string) error {
 	if !util.Exists(path) {
 		util.MakeDir(path)
 	}
-	_, name := filepath.Split(filePath)
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	f, err := os.Create(filepath.Join(path, name+".temp"))
+	name := strings.Replace(s.Name, " ", "_", -1) + ".torrent"
+	f, err := os.Create(filepath.Join(path, name))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	c := bencodeCache{DataPath: downloadPath}
-	err = bencode.Marshal(f, c)
+	err = createCacheFile(f, s)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func GetCachedTorrents() ([]*Session, error) {
+func GetCachedTorrents(program *tea.Program) ([]*Session, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return nil, err
@@ -93,12 +113,11 @@ func GetCachedTorrents() ([]*Session, error) {
 	}
 	var torrents []*Session
 	for _, file := range files {
-		if !strings.Contains(file.Name(), ".temp") {
-			continue
+		f, err := os.ReadFile(filepath.Join(path, file.Name()))
+		if err != nil {
+			return nil, err
 		}
-		name := strings.TrimSuffix(file.Name(), filepath.Ext(file.Name()))
-		dataPath, _, err := getCacheFile(filepath.Join(path, file.Name()))
-		session, err := OpenTorrent(filepath.Join(path, name+".torrent"), dataPath)
+		session, err := parseCacheFile(f)
 		if err != nil {
 			continue
 		}
@@ -109,22 +128,18 @@ func GetCachedTorrents() ([]*Session, error) {
 	return torrents, nil
 }
 
-func createSession(t *TorrentInfo, downloadPath string) (Session, error) {
-	var peerID [20]byte
-	_, err := rand.Read(peerID[:])
+func InitCachedSession(session *Session) {
+	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Initializing Torrent"})
+	peers, err := GetPeers(&session.TrackerInfo, session.PeerID)
 	if err != nil {
-		return Session{}, err
+		session.Tui.Send(util.ErrorMsg{TorrentId: session.TorrentID, Err: err.Error()})
+		return
 	}
-	tracker := TrackerInfo{Announce: t.Announce, AnnounceList: t.AnnounceList, InfoHash: t.InfoHash}
-	torrent := Session{
-		TrackerInfo: tracker,
-		PeerID:      peerID,
-		PieceHashes: t.PieceHashes,
-		PieceLength: t.PieceLength,
-		Length:      t.Length,
-		Name:        t.Name,
-		Files:       t.Files,
-		Path:        downloadPath,
+	session.Peers = peers
+	err = session.initFile()
+	if err != nil {
+		return
 	}
-	return torrent, nil
+	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Downloading"})
+	session.Tui.Send(util.ProgressMsg{TorrentId: session.TorrentID, Progress: getCompletePercentage(len(session.PiecesDone), len(session.PieceHashes))})
 }

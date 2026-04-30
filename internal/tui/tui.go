@@ -6,7 +6,6 @@ import (
 	"gotorrent/internal/util"
 	"image/color"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,30 +37,17 @@ type torrentModel struct {
 	Progress progress.Model
 	Status   string
 	Spinner  spinner.Model
-	State    torrentState
+	State    util.TorrentState
 	Err      string
 	Torrent  *session.Session
+	Id       int
 }
-
-const (
-	padding = 2
-)
-
-type torrentState int
-
-const (
-	torrentStopped  torrentState = 0
-	torrentStarted  torrentState = 1
-	torrentFinished torrentState = 2
-)
 
 type uiState int
 
 const (
-	uiMain     uiState = 0
-	uiPicker   uiState = 1
-	uiDownload uiState = 2
-	uiForm     uiState = 3
+	uiMain uiState = 0
+	uiForm uiState = 1
 )
 
 type clearErrorMsg struct {
@@ -141,12 +127,10 @@ func (s *Styles) blurredButton(str string) string {
 func initModel() model {
 	m := model{styles: NewStyles}
 
-	//progress := progress.New(progress.WithDefaultBlend())
-
 	m.choices = []string{"downloads", "new", "magnet", "exit"}
 	m.menuIndex = 1
 	m.downloadIndex = 0
-	torrents, err := getCache()
+	torrents, err := getCache(m)
 	if err == nil {
 		m.torrents = torrents
 	}
@@ -200,12 +184,19 @@ func newMagnetForm() *huh.Form {
 }
 
 func (m model) Init() tea.Cmd {
-	var cmds []tea.Cmd
-	for _, t := range m.torrents {
-		cmd := t.Progress.SetPercent(float64(len(t.Torrent.PiecesDone)) / float64(len(t.Torrent.PieceHashes)))
-		cmds = append(cmds, cmd)
+	for i, t := range m.torrents {
+		t.Torrent.Tui = m.program
+		t.Torrent.TorrentID = i
+		t.State = util.StateInit
+		t.Spinner.Tick()
+		//t.Status = "Initializing torrent"
+		go func() {
+			session.InitCachedSession(t.Torrent)
+			t.State = util.StateStopped
+			//t.Status = "Ready"
+		}()
 	}
-	return tea.Batch(cmds...)
+	return nil
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -265,7 +256,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds []tea.Cmd
 		)
 		for _, t := range m.torrents {
-			if t.State == torrentStarted {
+			if t.State == util.StateDownloading || t.State == util.StateInit {
 				t.Spinner, cmd = t.Spinner.Update(msg)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
@@ -347,15 +338,17 @@ func formUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 		torrent := torrentModel{SavePath: path, FilePath: file}
 		torrent.initTorrent()
 		m.torrents = append(m.torrents, &torrent)
+		torrent.Id = len(m.torrents) - 1
 		if strings.HasPrefix(file, "magnet") {
-			go torrent.openMagnet()
+			go torrent.openMagnet(m, torrent.Id)
 		} else {
-			go torrent.openFile()
+			go torrent.openFile(m, torrent.Id)
 		}
-
-		//prog := torrent.Progress.SetPercent(float64(len(torrent.Torrent.PiecesDone)) / float64(len(torrent.Torrent.PieceHashes)))
+		torrent.State = util.StateInit
 		cmds = append(cmds, tea.RequestWindowSize)
-		//torrent.createCacheTorrent()
+		cmds = append(cmds, func() tea.Msg {
+			return torrent.Spinner.Tick()
+		})
 		m.state = uiMain
 	}
 
@@ -363,7 +356,7 @@ func formUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func downloadView(m model) string {
-	downloads := []string{}
+	var downloads []string
 
 	for i, torrent := range m.torrents {
 		downloads = append(downloads, torrent.torrentView(m, i))
@@ -383,9 +376,13 @@ func downloadUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "down", "left", "right", "enter":
 			s := msg.String()
 			if s == "enter" {
-				m.torrents[m.downloadIndex].downloadFile(m, m.downloadIndex)
-				cmd = func() tea.Msg {
-					return m.torrents[m.downloadIndex].Spinner.Tick()
+				if m.torrents[m.downloadIndex].State == util.StateDownloading {
+					m.torrents[m.downloadIndex].stopDownload(m)
+				} else {
+					m.torrents[m.downloadIndex].downloadFile(m)
+					cmd = func() tea.Msg {
+						return m.torrents[m.downloadIndex].Spinner.Tick()
+					}
 				}
 			}
 			if s == "up" {
@@ -465,29 +462,6 @@ func mainUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func progressUpdate(m model, msg tea.Msg) (tea.Model, tea.Cmd) {
-	cmds := []tea.Cmd{}
-	switch msg := msg.(type) {
-
-	case progress.FrameMsg:
-		for _, t := range m.torrents {
-			var cmd tea.Cmd
-			t.Progress, cmd = t.Progress.Update(msg)
-			cmds = append(cmds, cmd)
-		}
-		return m, tea.Batch(cmds...)
-
-	case spinner.TickMsg:
-		for _, t := range m.torrents {
-			var cmd tea.Cmd
-			t.Spinner, cmd = t.Spinner.Update(msg)
-			cmds = append(cmds, cmd)
-		}
-		return m, tea.Batch(cmds...)
-	}
-	return m, nil
-}
-
 func (t *torrentModel) initTorrent() tea.Cmd {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -497,14 +471,14 @@ func (t *torrentModel) initTorrent() tea.Cmd {
 	p := progress.New(progress.WithDefaultBlend())
 	t.Progress = p
 	t.Status = "Not Started"
-	t.State = torrentStopped
+	t.State = util.StateStopped
 
 	return t.Progress.Init()
 }
 
 func (t *torrentModel) progressView() string {
 	var s string
-	if t.State == torrentStarted {
+	if t.State == util.StateDownloading || t.State == util.StateInit {
 		s = lipgloss.JoinHorizontal(lipgloss.Top, t.Progress.View(), "   ", t.Spinner.View(), t.Status)
 	} else {
 		s = lipgloss.JoinHorizontal(lipgloss.Top, t.Progress.View(), "   ", t.Status)
@@ -528,7 +502,12 @@ func (t *torrentModel) torrentView(m model, i int) string {
 	} else {
 		name = "Loading Metadata"
 	}
-	info := lipgloss.JoinHorizontal(lipgloss.Top, name, "    ", button)
+	var info string
+	if t.State == util.StateInit {
+		info = lipgloss.JoinHorizontal(lipgloss.Top, name)
+	} else {
+		info = lipgloss.JoinHorizontal(lipgloss.Top, name, "    ", button)
+	}
 	if len(t.Err) > 0 {
 		err := styles.ErrorHeaderText.Render(t.Err)
 		view = lipgloss.JoinVertical(lipgloss.Top, info, t.progressView(), err)
@@ -539,71 +518,34 @@ func (t *torrentModel) torrentView(m model, i int) string {
 	return view
 }
 
-func (t *torrentModel) openFile() tea.Msg {
-	tf, err := session.OpenTorrent(t.FilePath, t.SavePath)
+func (t *torrentModel) openFile(m model, id int) tea.Msg {
+	tf, err := session.OpenTorrent(t.FilePath, t.SavePath, m.program, id)
 	if err != nil {
-		return tea.Quit()
+		return util.ErrorMsg{TorrentId: id, Err: t.Err}
 	}
 	t.Torrent = tf
+	t.State = util.StateStopped
 	return t
 }
 
-func (t *torrentModel) openMagnet() tea.Msg {
-	tf, err := session.OpenMagnet(t.FilePath, t.SavePath)
+func (t *torrentModel) openMagnet(m model, id int) tea.Msg {
+	tf, err := session.OpenMagnet(t.FilePath, t.SavePath, m.program, id)
 	if err != nil {
-		return tea.Quit()
+		return util.ErrorMsg{TorrentId: id, Err: t.Err}
 	}
 	t.Torrent = tf
+	t.State = util.StateStopped
 	return t
 }
 
-func (t *torrentModel) createCacheTorrent() error {
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(cache, "cliTorrent")
-	if !util.Exists(path) {
-		util.MakeDir(path)
-	}
-	_, name := filepath.Split(t.FilePath)
-	f, err := os.Create(filepath.Join(path, name))
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	// c := session.BencodeTorrentModel{FilePath: t.FilePath, SavePath: t.SavePath}
-	// err = bencode.Marshal(f, c)
-	data, err := os.ReadFile(t.FilePath)
-	if err != nil {
-		return err
-	}
-	f.Write(data)
-	return nil
-}
-
-func getCache() ([]*torrentModel, error) {
-	cachePath, err := os.UserCacheDir()
+func getCache(m model) ([]*torrentModel, error) {
+	cache, err := session.GetCachedTorrents(m.program)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(cachePath, "cliTorrent")
-	if !util.Exists(path) {
-		return nil, err
-	}
-	var torrents []*torrentModel
-	cache, err := session.GetCachedTorrents()
-	if err != nil {
-		return torrents, err
-	}
+	torrents := make([]*torrentModel, 0)
 	for _, file := range cache {
-		// f, err := os.Open(filepath.Join(path, file.Name()))
-		// if err != nil {
-		// 	return nil, err
-		// }
 		torrent := torrentModel{}
-		// c := session.BencodeTorrentModel{}
-		// bencode.Unmarshal(f, &c)
 		torrent.initTorrent()
 		torrent.Torrent = file
 		torrent.SavePath = file.Path
@@ -613,14 +555,40 @@ func getCache() ([]*torrentModel, error) {
 	return torrents, nil
 }
 
-func (t *torrentModel) downloadFile(m model, id int) tea.Msg {
-	t.State = torrentStarted
+func (t *torrentModel) stopDownload(m model) tea.Msg {
+	t.State = util.StateStopped
+	t.Torrent.Wg.Done()
+	//go func() {
+	//	err := t.Torrent.StartDownload()
+	//	if err != nil {
+	//		t.Status = err.Error()
+	//		t.Err = err.Error()
+	//	}
+	//	t.State = util.StateDownloadFinished
+	//}()
+	return m
+}
+
+func (t *torrentModel) downloadFile(m model) tea.Msg {
+	t.State = util.StateDownloading
 	go func() {
-		err := t.Torrent.StartDownload(m.program, id)
-		if err != nil {
-			t.Status = err.Error()
-		}
-		t.State = torrentFinished
+		t.Torrent.Wg.Go(func() {
+			err := t.Torrent.StartDownload()
+			if err != nil {
+				t.Status = err.Error()
+				t.Err = err.Error()
+			}
+			t.State = util.StateDownloadFinished
+		})
+		t.Torrent.Wg.Wait()
 	}()
+	//go func() {
+	//	err := t.Torrent.StartDownload()
+	//	if err != nil {
+	//		t.Status = err.Error()
+	//		t.Err = err.Error()
+	//	}
+	//	t.State = util.StateDownloadFinished
+	//}()
 	return m
 }
