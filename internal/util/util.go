@@ -5,17 +5,23 @@ import (
 	"os"
 )
 
-type MessageType int
+type TorrentState int
 
 const (
-	MsgProgress MessageType = 0
-	MsgStatus   MessageType = 1
-	MsgError    MessageType = 2
+	StateInit             TorrentState = 0
+	StateStopped          TorrentState = 1
+	StateDownloading      TorrentState = 2
+	StateDownloadFinished TorrentState = 3
 )
 
 type ProgressMsg struct {
 	TorrentId int
 	Progress  float64
+}
+
+type StateMsg struct {
+	TorrentId int
+	State     TorrentState
 }
 
 type StatusMsg struct {

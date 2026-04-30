@@ -11,8 +11,24 @@ import (
 )
 
 type bencodeCache struct {
-	DataPath   string `bencode:"data-path"`
-	PiecesDone []int  `bencode:"pieces-done"`
+	TrackerInfo bencodeTrackerCache `bencode:"tracker-info"`
+	Seeders     uint32              `bencode:"seeders"`
+	Leechers    uint32              `bencode:"leechers"`
+	PeerID      [20]byte            `bencode:"peer-id"`
+	PieceHashes [][20]byte          `bencode:"piece hashes"`
+	PieceLength int                 `bencode:"piece length"`
+	Length      int                 `bencode:"length"`
+	Name        string              `bencode:"name"`
+	Files       []bencodeFile       `bencode:"files"`
+	Path        string              `bencode:"path"`
+	PiecesDone  []int               `bencode:"pieces-done"`
+}
+
+type bencodeTrackerCache struct {
+	Announce     string     `bencode:"announce"`
+	AnnounceList [][]string `bencode:"announce-list"`
+	InfoHash     [20]byte   `bencode:"info-hash"`
+	Length       int        `bencode:"length"`
 }
 
 type bencodeExtensionHandshake struct {
@@ -146,19 +162,64 @@ func parseExtensionMessage(data []byte) (*MetadataExtensionMessage, error) {
 	return &ext, nil
 }
 
-func getCacheFile(path string) (string, []int, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", nil, err
+func createCacheFile(file *os.File, session *Session) error {
+	files := make([]bencodeFile, 0)
+	for _, file := range session.Files {
+		files = append(files, bencodeFile{Length: file.Length, Path: file.Path})
 	}
-	defer file.Close()
-	bc := bencodeCache{}
-	err = bencode.Unmarshal(file, &bc)
-	if err != nil {
-		return "", nil, err
+	cacheFile := bencodeCache{
+		TrackerInfo: bencodeTrackerCache{
+			Announce:     session.Announce,
+			AnnounceList: session.AnnounceList,
+			InfoHash:     session.InfoHash,
+			Length:       session.Length,
+		},
+		Seeders:     session.Seeders,
+		Leechers:    session.Leechers,
+		PeerID:      session.PeerID,
+		PieceHashes: session.PieceHashes,
+		PieceLength: session.PieceLength,
+		Length:      session.Length,
+		Name:        session.Name,
+		Files:       files,
+		Path:        session.Path,
+		PiecesDone:  session.PiecesDone,
 	}
+	err := bencode.Marshal(file, cacheFile)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
-	return bc.DataPath, bc.PiecesDone, nil
+func parseCacheFile(data []byte) (*Session, error) {
+	cacheFile := bencodeCache{}
+	buf := bytes.NewReader(data)
+	err := bencode.Unmarshal(buf, &cacheFile)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]TorrentFile, 0)
+	for _, file := range cacheFile.Files {
+		files = append(files, TorrentFile{Length: file.Length, Path: file.Path})
+	}
+	tracker := TrackerInfo{Announce: cacheFile.TrackerInfo.Announce, AnnounceList: cacheFile.TrackerInfo.AnnounceList, InfoHash: cacheFile.TrackerInfo.InfoHash, Length: cacheFile.TrackerInfo.Length}
+
+	session := Session{
+		TrackerInfo: tracker,
+		Peers:       []Peer{},
+		Seeders:     cacheFile.Seeders,
+		Leechers:    cacheFile.Leechers,
+		PeerID:      cacheFile.PeerID,
+		PieceHashes: cacheFile.PieceHashes,
+		PieceLength: cacheFile.PieceLength,
+		Length:      cacheFile.Length,
+		Name:        cacheFile.Name,
+		Files:       files,
+		Path:        cacheFile.Path,
+		PiecesDone:  cacheFile.PiecesDone,
+	}
+	return &session, nil
 }
 
 func ParseTorrentMagnet(b []byte) (TorrentInfo, error) {

@@ -85,7 +85,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 
 	t, err := GetMetadata(peers, peerID, mag.InfoHash)
 	if err != nil {
-		return &Session{}, err
+		return nil, err
 	}
 	session := Session{
 		TrackerInfo: track,
@@ -102,7 +102,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 	}
 	err = session.initFile()
 	if err != nil {
-		return &session, err
+		return nil, err
 	}
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return &session, nil
