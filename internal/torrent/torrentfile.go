@@ -140,6 +140,6 @@ func InitCachedSession(session *Session) {
 	if err != nil {
 		return
 	}
-	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Downloading"})
+	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Ready"})
 	session.Tui.Send(util.ProgressMsg{TorrentId: session.TorrentID, Progress: getCompletePercentage(len(session.PiecesDone), len(session.PieceHashes))})
 }

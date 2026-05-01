@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,7 +33,8 @@ type Session struct {
 	Files       []TorrentFile
 	Path        string
 	PiecesDone  []int
-	wg          sync.WaitGroup
+	Tui         *tea.Program
+	TorrentID   int
 }
 
 type cache struct {
@@ -215,8 +215,6 @@ func (t *Session) StartDownload(program *tea.Program, id int) error {
 }
 
 func (t *Session) Download(program *tea.Program, id int) error {
-	t.wg.Add(1)
-	defer t.wg.Done()
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
@@ -248,7 +246,6 @@ func (t *Session) Download(program *tea.Program, id int) error {
 		program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(t.PiecesDone), len(t.PieceHashes))})
 	}
 	close(workQueue)
-	t.wg.Wait()
 	return nil
 }
 

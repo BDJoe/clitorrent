@@ -557,7 +557,6 @@ func getCache(m model) ([]*torrentModel, error) {
 
 func (t *torrentModel) stopDownload(m model) tea.Msg {
 	t.State = util.StateStopped
-	t.Torrent.Wg.Done()
 	//go func() {
 	//	err := t.Torrent.StartDownload()
 	//	if err != nil {
@@ -572,15 +571,12 @@ func (t *torrentModel) stopDownload(m model) tea.Msg {
 func (t *torrentModel) downloadFile(m model) tea.Msg {
 	t.State = util.StateDownloading
 	go func() {
-		t.Torrent.Wg.Go(func() {
-			err := t.Torrent.StartDownload()
-			if err != nil {
-				t.Status = err.Error()
-				t.Err = err.Error()
-			}
-			t.State = util.StateDownloadFinished
-		})
-		t.Torrent.Wg.Wait()
+		err := t.Torrent.StartDownload(m.program, t.Id)
+		if err != nil {
+			t.Status = err.Error()
+			t.Err = err.Error()
+		}
+		t.State = util.StateDownloadFinished
 	}()
 	//go func() {
 	//	err := t.Torrent.StartDownload()
