@@ -18,6 +18,7 @@ type Client struct {
 	Metadata
 	infoHash [20]byte
 	peerID   [20]byte
+	peer     Peer
 }
 
 func completeHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, error) {

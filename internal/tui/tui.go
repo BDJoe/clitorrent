@@ -184,11 +184,14 @@ func newMagnetForm() *huh.Form {
 }
 
 func (m model) Init() tea.Cmd {
+	var cmds []tea.Cmd
 	for i, t := range m.torrents {
 		t.Torrent.Tui = m.program
 		t.Torrent.TorrentID = i
 		t.State = util.StateInit
-		t.Spinner.Tick()
+		cmds = append(cmds, func() tea.Msg {
+			return t.Spinner.Tick()
+		})
 		//t.Status = "Initializing torrent"
 		go func() {
 			session.InitCachedSession(t.Torrent)
@@ -196,7 +199,7 @@ func (m model) Init() tea.Cmd {
 			//t.Status = "Ready"
 		}()
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -470,7 +473,6 @@ func (t *torrentModel) initTorrent() tea.Cmd {
 
 	p := progress.New(progress.WithDefaultBlend())
 	t.Progress = p
-	t.Status = "Not Started"
 	t.State = util.StateStopped
 
 	return t.Progress.Init()
@@ -491,17 +493,30 @@ func (t *torrentModel) torrentView(m model, i int) string {
 	styles := m.styles(m.hasDarkBg)
 	var button string
 	var view string
-	button = styles.blurredButton("Start")
-
-	if m.menuIndex == 0 && i == m.downloadIndex {
-		button = styles.focusedButton("Start")
+	var buttonName string
+	switch t.State {
+	case util.StateDownloading:
+		buttonName = "Stop"
+	default:
+		buttonName = "Start"
 	}
+	button = styles.blurredButton(buttonName)
+
 	var name string
 	if t.Torrent != nil {
 		name = t.Torrent.Name
 	} else {
 		name = "Loading Metadata"
 	}
+
+	if m.menuIndex == 0 && i == m.downloadIndex {
+		if t.State == util.StateInit {
+			name = styles.FocusedStyle.Render(name)
+		} else {
+			button = styles.focusedButton(buttonName)
+		}
+	}
+
 	var info string
 	if t.State == util.StateInit {
 		info = lipgloss.JoinHorizontal(lipgloss.Top, name)
@@ -557,14 +572,7 @@ func getCache(m model) ([]*torrentModel, error) {
 
 func (t *torrentModel) stopDownload(m model) tea.Msg {
 	t.State = util.StateStopped
-	//go func() {
-	//	err := t.Torrent.StartDownload()
-	//	if err != nil {
-	//		t.Status = err.Error()
-	//		t.Err = err.Error()
-	//	}
-	//	t.State = util.StateDownloadFinished
-	//}()
+	t.Torrent.StopDownload()
 	return m
 }
 

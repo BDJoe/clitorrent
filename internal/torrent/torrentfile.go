@@ -62,6 +62,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		Path:        downloadPath,
 		Tui:         program,
 		TorrentID:   id,
+		closeChan:   make(chan struct{}),
 	}
 
 	err = session.initFile()

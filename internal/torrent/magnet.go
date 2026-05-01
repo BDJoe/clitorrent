@@ -91,6 +91,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		TrackerInfo: track,
 		Peers:       peers,
 		PeerID:      peerID,
+		closeChan:   make(chan struct{}),
 		PieceHashes: t.PieceHashes,
 		PieceLength: t.PieceLength,
 		Length:      t.Length,
@@ -101,6 +102,10 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		TorrentID:   id,
 	}
 	err = session.initFile()
+	if err != nil {
+		return nil, err
+	}
+	err = session.createCache()
 	if err != nil {
 		return nil, err
 	}
