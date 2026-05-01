@@ -11,32 +11,44 @@ import (
 
 // A Client is a TCP connection with a peer
 type Client struct {
-	Conn     net.Conn
-	Choked   bool
-	Bitfield Bitfield
+	Conn           net.Conn
+	Choked         bool
+	PeerChoked     bool
+	Interested     bool
+	PeerInterested bool
+	Bitfield       *Bitfield
+	PeerBitfield   Bitfield
 	Extension
 	Metadata
-	infoHash [20]byte
-	peerID   [20]byte
-	peer     Peer
+	InfoHash [20]byte
+	MyPeerID [20]byte
+	//PeerID   [20]byte
+	Peer Peer
 }
 
-func completeHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, error) {
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	defer conn.SetDeadline((time.Time{})) // Disable the deadline
+func (c *Client) completeHandshake() (*Handshake, error) {
+	c.Conn.SetDeadline(time.Now().Add(3 * time.Second))
+	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
-	req := newHandshake(infohash, peerID)
-	_, err := conn.Write(req.Serialize())
+	req := newHandshake(c.InfoHash, c.MyPeerID)
+	_, err := c.Conn.Write(req.Serialize())
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := readHandshake(conn)
+	res, err := readHandshake(c.Conn)
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(res.InfoHash[:], infohash[:]) {
-		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, infohash)
+	if !bytes.Equal(res.InfoHash[:], c.InfoHash[:]) {
+		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
+	}
+
+	if len(*c.Bitfield) != 0 {
+		err = c.SendBitfield()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return res, nil
@@ -87,24 +99,28 @@ func (c *Client) recvBitfield() error {
 		err := fmt.Errorf("Expected bitfield but got ID %d", msg.ID)
 		return err
 	}
-	c.Bitfield = msg.Payload
+	c.PeerBitfield = msg.Payload
 	return nil
 }
 
 // New connects with a peer, completes a handshake, and receives a handshake
 // returns an err if any of those fail
-func newClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
+func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	client := Client{
-		Conn:     conn,
-		Choked:   true,
-		infoHash: infoHash,
-		peerID:   peerID,
+		Conn:           conn,
+		Choked:         true,
+		PeerChoked:     true,
+		Interested:     false,
+		PeerInterested: false,
+		InfoHash:       infoHash,
+		MyPeerID:       peerID,
+		Bitfield:       bitfield,
 	}
-	_, err = completeHandshake(client.Conn, infoHash, peerID)
+	_, err = client.completeHandshake()
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -129,8 +145,8 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 	client := Client{
 		Conn:     conn,
 		Choked:   true,
-		infoHash: infoHash,
-		peerID:   peerID,
+		InfoHash: infoHash,
+		MyPeerID: peerID,
 	}
 	_, err = completeMagnetHandshake(client.Conn, infoHash, peerID)
 	if err != nil {
@@ -138,11 +154,11 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*Client, error) {
 		return nil, err
 	}
 
-	//bf, err := recvBitfield(conn)
-	//if err != nil {
-	//	conn.Close()
-	//	return nil, err
-	//}
+	err = client.recvBitfield()
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	return &client, nil
 }
@@ -181,18 +197,28 @@ func (c *Client) handleMessage(msg *Message) error {
 	}
 
 	switch msg.ID {
-	case MsgUnchoke:
-		c.Choked = false
 	case MsgChoke:
 		c.Choked = true
+	case MsgUnchoke:
+		c.Choked = false
+	case MsgInterested:
+		c.PeerInterested = true
+		c.SendUnchoke()
+	case MsgNotInterested:
+		c.PeerInterested = false
 	case MsgHave:
 		index, err := parseHave(msg)
 		if err != nil {
 			return err
 		}
-		c.Bitfield.SetPiece(index)
+		c.PeerBitfield.SetPiece(index)
 	case MsgBitfield:
-		c.Bitfield = msg.Payload
+		c.PeerBitfield = msg.Payload
+	case MsgRequest:
+		err := c.HandleRequest(msg)
+		if err != nil {
+			return err
+		}
 	case MsgExtended:
 		c.handleExtension(msg.Payload)
 	default:
@@ -201,9 +227,25 @@ func (c *Client) handleMessage(msg *Message) error {
 	return nil
 }
 
+func (c *Client) HandleRequest(m *Message) error {
+	index, begin, length, err := parseRequest(m)
+	if err != nil {
+		return err
+	}
+	fmt.Println(index, begin, length)
+	return nil
+}
+
 // SendRequest sends a Request message to the peer
 func (c *Client) SendRequest(index, begin, length int) error {
 	req := formatRequest(index, begin, length)
+	_, err := c.Conn.Write(req.Serialize())
+	return err
+}
+
+// SendBitfield sends a Request message to the peer
+func (c *Client) SendBitfield() error {
+	req := formatBitfield(*c.Bitfield)
 	_, err := c.Conn.Write(req.Serialize())
 	return err
 }

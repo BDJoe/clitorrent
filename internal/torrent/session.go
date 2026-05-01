@@ -40,6 +40,7 @@ type Session struct {
 	closeChan   chan struct{}
 	workQueue   chan *pieceWork
 	results     chan *pieceResult
+	bitfield    Bitfield
 }
 
 type cache struct {
@@ -87,7 +88,7 @@ func (state *pieceProgress) readMessage() error {
 		if err != nil {
 			return err
 		}
-		state.client.Bitfield.SetPiece(index)
+		state.client.PeerBitfield.SetPiece(index)
 	case MsgPiece:
 		n, err := parsePiece(state.index, state.buf, msg)
 		if err != nil {
@@ -147,7 +148,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
-	c, err := newClient(peer, s.PeerID, s.InfoHash)
+	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
 		return
@@ -160,7 +161,7 @@ func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
 	c.SendInterested()
 
 	for pw := range s.workQueue {
-		if !c.Bitfield.HasPiece(pw.index) {
+		if !c.PeerBitfield.HasPiece(pw.index) {
 			s.workQueue <- pw // Put piece back on the queue
 			continue
 		}
@@ -180,6 +181,7 @@ func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
 		}
 
 		c.SendHave(pw.index)
+		s.bitfield.SetPiece(pw.index)
 		s.results <- &pieceResult{pw.index, buf}
 	}
 }
@@ -211,10 +213,11 @@ func (s *Session) StartDownload(program *tea.Program, id int) error {
 
 	var wg sync.WaitGroup
 	var err error
+	defer wg.Done()
 	wg.Add(1)
 	go func() {
 		err = s.Download(program, id)
-		wg.Done()
+		//wg.Done()
 	}()
 	wg.Wait()
 	if err != nil {
@@ -238,6 +241,8 @@ func (s *Session) Download(program *tea.Program, id int) error {
 		if !slices.Contains(s.PiecesDone, index) {
 			length := s.calculatePieceSize(index)
 			s.workQueue <- &pieceWork{index, hash, length}
+		} else {
+			s.bitfield.SetPiece(index)
 		}
 	}
 

@@ -37,6 +37,14 @@ func formatRequest(index, begin, length int) *Message {
 	return &Message{ID: MsgRequest, Payload: payload}
 }
 
+func formatBitfield(bitfield Bitfield) *Message {
+	return &Message{ID: MsgBitfield, Payload: bitfield}
+}
+
+//func formatPiece(index, begin, length int) *Message {
+//	payload := make([]byte, 8)
+//}
+
 // formatHave creates a Have message
 func formatHave(index int) *Message {
 	payload := make([]byte, 4)
@@ -66,6 +74,19 @@ func parsePiece(index int, buf []byte, msg *Message) (int, error) {
 	}
 	copy(buf[begin:], data)
 	return len(data), nil
+}
+
+func parseRequest(msg *Message) (int, int, int, error) {
+	if msg.ID != MsgRequest {
+		return 0, 0, 0, fmt.Errorf("Expected Request (ID %d), got ID %d", MsgRequest, msg.ID)
+	}
+	if len(msg.Payload) != 12 {
+		return 0, 0, 0, fmt.Errorf("expected payload length 12, got length %d", len(msg.Payload))
+	}
+	index := int(binary.BigEndian.Uint32(msg.Payload[0:4]))
+	begin := int(binary.BigEndian.Uint32(msg.Payload[4:8]))
+	length := int(binary.BigEndian.Uint32(msg.Payload[8:12]))
+	return index, begin, length, nil
 }
 
 // parseHave parse a Have message
