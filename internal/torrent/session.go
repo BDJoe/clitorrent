@@ -79,16 +79,28 @@ func (state *pieceProgress) readMessage() error {
 	}
 
 	switch msg.ID {
-	case MsgUnchoke:
-		state.client.Choked = false
 	case MsgChoke:
 		state.client.Choked = true
+	case MsgUnchoke:
+		state.client.Choked = false
+	case MsgInterested:
+		state.client.PeerInterested = true
+		state.client.SendUnchoke()
+	case MsgNotInterested:
+		state.client.PeerInterested = false
 	case MsgHave:
 		index, err := parseHave(msg)
 		if err != nil {
 			return err
 		}
 		state.client.PeerBitfield.SetPiece(index)
+	case MsgBitfield:
+		state.client.PeerBitfield = msg.Payload
+	case MsgRequest:
+		err := state.client.HandleRequest(msg)
+		if err != nil {
+			return err
+		}
 	case MsgPiece:
 		n, err := parsePiece(state.index, state.buf, msg)
 		if err != nil {
@@ -96,6 +108,8 @@ func (state *pieceProgress) readMessage() error {
 		}
 		state.downloaded += n
 		state.backlog--
+	case MsgExtended:
+		state.client.handleExtension(msg.Payload)
 	}
 	return nil
 }
