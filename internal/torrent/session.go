@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"gotorrent/internal/util"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,11 +42,7 @@ type Session struct {
 	workQueue   chan *pieceWork
 	results     chan *pieceResult
 	bitfield    Bitfield
-}
-
-type cache struct {
-	Path       string
-	PiecesDone []int
+	cache       []byte
 }
 
 type pieceWork struct {
@@ -227,11 +224,10 @@ func (s *Session) StartDownload(program *tea.Program, id int) error {
 
 	var wg sync.WaitGroup
 	var err error
-	defer wg.Done()
 	wg.Add(1)
 	go func() {
 		err = s.Download(program, id)
-		//wg.Done()
+		wg.Done()
 	}()
 	wg.Wait()
 	if err != nil {
@@ -290,7 +286,11 @@ func (s *Session) Download(program *tea.Program, id int) error {
 }
 
 func getCompletePercentage(done int, total int) float64 {
-	return float64(done) / float64(total)
+	res := math.Min(float64(done)/float64(total), 0.99)
+	if done == total {
+		res = 1.0
+	}
+	return res
 }
 
 func (s *Session) getCache(buf []byte) error {
