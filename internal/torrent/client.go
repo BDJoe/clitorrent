@@ -202,6 +202,7 @@ func (c *Client) handleMessage(msg *Message) error {
 	case MsgUnchoke:
 		c.Choked = false
 	case MsgInterested:
+		fmt.Println(msg.String())
 		c.PeerInterested = true
 		c.SendUnchoke()
 	case MsgNotInterested:
@@ -215,6 +216,7 @@ func (c *Client) handleMessage(msg *Message) error {
 	case MsgBitfield:
 		c.PeerBitfield = msg.Payload
 	case MsgRequest:
+		fmt.Println(msg.String())
 		err := c.HandleRequest(msg)
 		if err != nil {
 			return err

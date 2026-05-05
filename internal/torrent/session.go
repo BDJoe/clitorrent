@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gotorrent/internal/util"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -191,9 +192,61 @@ func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
 			continue
 		}
 
-		c.SendHave(pw.index)
 		s.bitfield.SetPiece(pw.index)
 		s.results <- &pieceResult{pw.index, buf}
+	}
+}
+
+func (s *Session) startSeeding() {
+	ln, err := net.Listen("tcp", ":6881")
+	defer ln.Close()
+	if err != nil {
+		return
+	}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
+
+		client := Client{
+			Conn:           conn,
+			Choked:         true,
+			PeerChoked:     true,
+			Interested:     false,
+			PeerInterested: false,
+			InfoHash:       s.InfoHash,
+			MyPeerID:       s.PeerID,
+			Bitfield:       &s.bitfield,
+		}
+		_, err = client.completeHandshake()
+		if err != nil {
+			conn.Close()
+			continue
+		}
+
+		err = client.recvBitfield()
+		if err != nil {
+			conn.Close()
+			continue
+		}
+		go func() {
+			client.Conn.SetDeadline(time.Now().Add(30 * time.Second))
+			defer client.Conn.SetDeadline(time.Time{})
+			for {
+				time.Sleep(250 * time.Millisecond)
+				msg, err := client.Read()
+				if err != nil {
+					client.Conn.Close()
+					return
+				}
+				err = client.handleMessage(msg)
+				if err != nil {
+					client.Conn.Close()
+					return
+				}
+			}
+		}()
 	}
 }
 
@@ -209,6 +262,12 @@ func (s *Session) calculateBoundsForPiece(index int) (begin int, end int) {
 func (s *Session) calculatePieceSize(index int) int {
 	begin, end := s.calculateBoundsForPiece(index)
 	return end - begin
+}
+
+func (s *Session) sendHaveToClients(pieceIndex int) {
+	for _, client := range s.Clients {
+		client.SendHave(pieceIndex)
+	}
 }
 
 func (s *Session) StartDownload(program *tea.Program, id int) error {
@@ -278,10 +337,12 @@ func (s *Session) Download(program *tea.Program, id int) error {
 			//if err != nil {
 			//	program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
 			//}
+			s.sendHaveToClients(res.index)
 			program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(s.PiecesDone), len(s.PieceHashes))})
 		}
 	}
 	close(s.workQueue)
+	s.startSeeding()
 	return nil
 }
 
@@ -302,6 +363,7 @@ func (s *Session) getCache(buf []byte) error {
 				continue
 			}
 			s.PiecesDone = append(s.PiecesDone, index)
+			s.bitfield.SetPiece(index)
 		}
 	}
 	return nil
