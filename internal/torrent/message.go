@@ -116,7 +116,7 @@ func (m *Message) Serialize() []byte {
 	return buf
 }
 
-func sendMessage(c *Client, msg []byte) error {
+func sendMessage(c *PeerConnection, msg []byte) error {
 	_, err := c.Conn.Write(msg)
 
 	if err != nil {
@@ -126,7 +126,7 @@ func sendMessage(c *Client, msg []byte) error {
 }
 
 // readMessage parses a message from a stream. Returns 'nil' on keep-alive message
-func readMessage(c *Client, timeout time.Duration) (*Message, error) {
+func readMessage(c *PeerConnection, timeout time.Duration) (*Message, error) {
 	lengthBuf := make([]byte, 4)
 	c.Conn.SetReadDeadline(time.Now().Add(timeout))
 	defer c.Conn.SetReadDeadline(time.Time{})

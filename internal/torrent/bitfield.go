@@ -1,7 +1,15 @@
 package torrent
 
+import "math"
+
 // A bitfield represents the pieces that a peer has
 type Bitfield []byte
+
+func newBitfield(length int) Bitfield {
+	numBytes := int(math.Ceil(float64(length / 8.0)))
+	bf := make([]byte, numBytes)
+	return bf
+}
 
 // HasPiece tells if a bitfield has a particular index set
 func (bf Bitfield) HasPiece(index int) bool {

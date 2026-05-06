@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"gotorrent/internal/util"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,7 +25,7 @@ const MaxBackLog = 5
 type Session struct {
 	TrackerInfo
 	Peers       []Peer
-	Clients     []*Client
+	Clients     []*PeerConnection
 	Seeders     uint32
 	Leechers    uint32
 	PeerID      [20]byte
@@ -59,7 +58,7 @@ type pieceResult struct {
 
 type pieceProgress struct {
 	index      int
-	client     *Client
+	peer       *PeerConnection
 	buf        []byte
 	downloaded int
 	requested  int
@@ -67,7 +66,7 @@ type pieceProgress struct {
 }
 
 func (state *pieceProgress) readMessage() error {
-	msg, err := state.client.Read() // this call blocks
+	msg, err := state.peer.Read() // this call blocks
 	if err != nil {
 		return err
 	}
@@ -78,24 +77,24 @@ func (state *pieceProgress) readMessage() error {
 
 	switch msg.ID {
 	case MsgChoke:
-		state.client.Choked = true
+		state.peer.Choked = true
 	case MsgUnchoke:
-		state.client.Choked = false
+		state.peer.Choked = false
 	case MsgInterested:
-		state.client.PeerInterested = true
-		state.client.SendUnchoke()
+		state.peer.PeerInterested = true
+		state.peer.SendUnchoke()
 	case MsgNotInterested:
-		state.client.PeerInterested = false
+		state.peer.PeerInterested = false
 	case MsgHave:
 		index, err := parseHave(msg)
 		if err != nil {
 			return err
 		}
-		state.client.PeerBitfield.SetPiece(index)
+		state.peer.PeerBitfield.SetPiece(index)
 	case MsgBitfield:
-		state.client.PeerBitfield = msg.Payload
+		state.peer.PeerBitfield = msg.Payload
 	case MsgRequest:
-		err := state.client.HandleRequest(msg)
+		err := state.peer.HandleRequest(msg)
 		if err != nil {
 			return err
 		}
@@ -107,16 +106,16 @@ func (state *pieceProgress) readMessage() error {
 		state.downloaded += n
 		state.backlog--
 	case MsgExtended:
-		state.client.handleExtension(msg.Payload)
+		state.peer.handleExtension(msg.Payload)
 	}
 	return nil
 }
 
-func attemptDownloadPiece(c *Client, pw *pieceWork) ([]byte, error) {
+func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 	state := pieceProgress{
-		index:  pw.index,
-		client: c,
-		buf:    make([]byte, pw.length),
+		index: pw.index,
+		peer:  c,
+		buf:   make([]byte, pw.length),
 	}
 
 	// Setting a deadline helps get unresponsive peers unstuck.
@@ -126,7 +125,7 @@ func attemptDownloadPiece(c *Client, pw *pieceWork) ([]byte, error) {
 
 	for state.downloaded < pw.length {
 		// If unchoked, send requests until we have enough unfulfilled requests
-		if !state.client.Choked {
+		if !state.peer.Choked {
 			for state.backlog < MaxBackLog && state.requested < pw.length {
 				blockSize := MaxBlockSize
 				// Last block might be shorter than the typical block
@@ -194,59 +193,6 @@ func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
 
 		s.bitfield.SetPiece(pw.index)
 		s.results <- &pieceResult{pw.index, buf}
-	}
-}
-
-func (s *Session) startSeeding() {
-	ln, err := net.Listen("tcp", ":6881")
-	defer ln.Close()
-	if err != nil {
-		return
-	}
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			continue
-		}
-
-		client := Client{
-			Conn:           conn,
-			Choked:         true,
-			PeerChoked:     true,
-			Interested:     false,
-			PeerInterested: false,
-			InfoHash:       s.InfoHash,
-			MyPeerID:       s.PeerID,
-			Bitfield:       &s.bitfield,
-		}
-		_, err = client.completeHandshake()
-		if err != nil {
-			conn.Close()
-			continue
-		}
-
-		err = client.recvBitfield()
-		if err != nil {
-			conn.Close()
-			continue
-		}
-		go func() {
-			client.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-			defer client.Conn.SetDeadline(time.Time{})
-			for {
-				time.Sleep(250 * time.Millisecond)
-				msg, err := client.Read()
-				if err != nil {
-					client.Conn.Close()
-					return
-				}
-				err = client.handleMessage(msg)
-				if err != nil {
-					client.Conn.Close()
-					return
-				}
-			}
-		}()
 	}
 }
 
@@ -342,7 +288,6 @@ func (s *Session) Download(program *tea.Program, id int) error {
 		}
 	}
 	close(s.workQueue)
-	s.startSeeding()
 	return nil
 }
 

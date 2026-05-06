@@ -29,7 +29,7 @@ type ExtensionMessageID struct {
 
 const MetadataPieceSize = 16384
 
-func (c *Client) handleExtension(buf []byte) {
+func (c *PeerConnection) handleExtension(buf []byte) {
 	if c.Extension.SupportedExtensions == nil {
 		c.Extension.SupportedExtensions = make(map[string]int)
 	}
@@ -60,7 +60,7 @@ func (c *Client) handleExtension(buf []byte) {
 	}
 }
 
-func (c *Client) getMetadata() ([]byte, error) {
+func (c *PeerConnection) getMetadata() ([]byte, error) {
 	id, supported := c.Extension.SupportedExtensions["ut_metadata"]
 	if !supported {
 		return nil, errors.New("no metadata extension")

@@ -29,6 +29,7 @@ type bencodeTrackerResp struct {
 
 type AnnounceRequest struct {
 	connectionId  uint64
+	action        uint32
 	transactionId uint32
 	InfoHash      [20]byte
 	PeerId        [20]byte
@@ -91,6 +92,7 @@ func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 		"downloaded": []string{"0"},
 		"compact":    []string{"1"},
 		"left":       []string{strconv.Itoa(t.Length)},
+		"event":      []string{"2"},
 	}
 	base.RawQuery = params.Encode()
 	return base.String(), nil
@@ -191,6 +193,7 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 		connectionId:  connId,
 		transactionId: transId,
 		PeerId:        peerID,
+		Event:         2,
 	}
 
 	a := createAnnounceReq(r)
@@ -231,18 +234,14 @@ func createAnnounceReq(r AnnounceRequest) []byte {
 	buf := make([]byte, 98)
 	binary.BigEndian.PutUint64(buf, r.connectionId) // 8 bytes
 	// Action - 1 for Announce
-	binary.BigEndian.PutUint32(buf[8:], 1)                // 4 bytes
-	binary.BigEndian.PutUint32(buf[12:], r.transactionId) // 4 bytes
-	copy(buf[16:], r.InfoHash[:])                         // 20 bytes
-	copy(buf[36:], r.PeerId[:])                           // 20 bytes
-	binary.BigEndian.PutUint64(buf[56:], r.Downloaded)    // 8 bytes
-	binary.BigEndian.PutUint64(buf[64:], r.Left)          // 8 bytes
-	binary.BigEndian.PutUint64(buf[72:], r.Uploaded)      // 8 bytes
-	// Event
-	// none = 0
-	// completed = 1
-	// started = 2
-	// stopped = 3
+	binary.BigEndian.PutUint32(buf[8:], 1)                  // 4 bytes
+	binary.BigEndian.PutUint32(buf[12:], r.transactionId)   // 4 bytes
+	copy(buf[16:], r.InfoHash[:])                           // 20 bytes
+	copy(buf[36:], r.PeerId[:])                             // 20 bytes
+	binary.BigEndian.PutUint64(buf[56:], r.Downloaded)      // 8 bytes
+	binary.BigEndian.PutUint64(buf[64:], r.Left)            // 8 bytes
+	binary.BigEndian.PutUint64(buf[72:], r.Uploaded)        // 8 bytes
+	binary.BigEndian.PutUint32(buf[76:], r.Event)           // Event, none = 0 completed = 1 started = 2 stopped = 3
 	binary.BigEndian.PutUint32(buf[80:], 0)                 // 4 bytes
 	binary.BigEndian.PutUint32(buf[84:], r.Ipaddr)          // 4 bytes
 	binary.BigEndian.PutUint32(buf[88:], r.Key)             // 4 bytes

@@ -50,6 +50,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 	if err != nil {
 		return nil, err
 	}
+	bf := newBitfield(len(tf.PieceHashes))
 	session := Session{
 		TrackerInfo: tracker,
 		Peers:       peers,
@@ -62,6 +63,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		Path:        downloadPath,
 		Tui:         program,
 		TorrentID:   id,
+		bitfield:    bf,
 		closeChan:   make(chan struct{}),
 	}
 
