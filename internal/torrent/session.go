@@ -21,28 +21,30 @@ const MaxBlockSize = 16384
 // MaxBackLog is the number of unfulfilled requests a client can have in its pipeline
 const MaxBackLog = 5
 
+const MaxConnections = 50
+
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
 	TrackerInfo
-	Peers       []Peer
-	Clients     []*PeerConnection
-	Seeders     uint32
-	Leechers    uint32
-	PeerID      [20]byte
-	PieceHashes [][20]byte
-	PieceLength int
-	Length      int
-	Name        string
-	Files       []TorrentFile
-	Path        string
-	PiecesDone  []int
-	Tui         *tea.Program
-	TorrentID   int
-	closeChan   chan struct{}
-	workQueue   chan *pieceWork
-	results     chan *pieceResult
-	bitfield    Bitfield
-	cache       []byte
+	ConnectedPeers    []*PeerConnection
+	Seeders           uint32
+	Leechers          uint32
+	PeerID            [20]byte
+	PieceHashes       [][20]byte
+	PieceLength       int
+	Length            int
+	Name              string
+	Files             []TorrentFile
+	Path              string
+	PiecesDone        []int
+	Tui               *tea.Program
+	TorrentID         int
+	closeChan         chan struct{}
+	workQueue         chan *pieceWork
+	results           chan *pieceResult
+	bitfield          Bitfield
+	peerMessageChan   chan PeerMessage
+	addConnectionChan chan *PeerConnection
 }
 
 type pieceWork struct {
@@ -58,15 +60,14 @@ type pieceResult struct {
 
 type pieceProgress struct {
 	index      int
-	peer       *PeerConnection
 	buf        []byte
 	downloaded int
 	requested  int
 	backlog    int
 }
 
-func (state *pieceProgress) readMessage() error {
-	msg, err := state.peer.Read() // this call blocks
+func (c *PeerConnection) readMessage() error {
+	msg, err := c.Read() // this call blocks
 	if err != nil {
 		return err
 	}
@@ -77,36 +78,36 @@ func (state *pieceProgress) readMessage() error {
 
 	switch msg.ID {
 	case MsgChoke:
-		state.peer.Choked = true
+		c.AmChoked = true
 	case MsgUnchoke:
-		state.peer.Choked = false
+		c.AmChoked = false
 	case MsgInterested:
-		state.peer.PeerInterested = true
-		state.peer.SendUnchoke()
+		c.PeerInterested = true
+		c.SendUnchoke()
 	case MsgNotInterested:
-		state.peer.PeerInterested = false
+		c.PeerInterested = false
 	case MsgHave:
 		index, err := parseHave(msg)
 		if err != nil {
 			return err
 		}
-		state.peer.PeerBitfield.SetPiece(index)
+		c.PeerBitfield.SetPiece(index)
 	case MsgBitfield:
-		state.peer.PeerBitfield = msg.Payload
+		c.PeerBitfield = msg.Payload
 	case MsgRequest:
-		err := state.peer.HandleRequest(msg)
+		err := c.HandleRequest(msg)
 		if err != nil {
 			return err
 		}
 	case MsgPiece:
-		n, err := parsePiece(state.index, state.buf, msg)
+		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
 		if err != nil {
 			return err
 		}
-		state.downloaded += n
-		state.backlog--
+		c.PieceState.downloaded += n
+		c.PieceState.backlog--
 	case MsgExtended:
-		state.peer.handleExtension(msg.Payload)
+		c.handleExtension(msg.Payload)
 	}
 	return nil
 }
@@ -114,9 +115,10 @@ func (state *pieceProgress) readMessage() error {
 func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 	state := pieceProgress{
 		index: pw.index,
-		peer:  c,
 		buf:   make([]byte, pw.length),
 	}
+
+	c.PieceState = &state
 
 	// Setting a deadline helps get unresponsive peers unstuck.
 	// 30 seconds is more than enough time to download a 262 KB piece
@@ -124,8 +126,12 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for state.downloaded < pw.length {
+		if c.AmChoked {
+			c.SendInterested()
+			continue
+		}
 		// If unchoked, send requests until we have enough unfulfilled requests
-		if !state.peer.Choked {
+		if !c.AmChoked {
 			for state.backlog < MaxBackLog && state.requested < pw.length {
 				blockSize := MaxBlockSize
 				// Last block might be shorter than the typical block
@@ -141,10 +147,6 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 				state.requested += blockSize
 			}
 		}
-		err := state.readMessage()
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return state.buf, nil
@@ -158,41 +160,123 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 	return nil
 }
 
-func (s *Session) startDownloadWorker(peer Peer, program *tea.Program, id int) {
+func (s *Session) startPeerConnection(peer Peer, program *tea.Program, id int) {
 	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
 		return
 	}
-	s.Clients = append(s.Clients, c)
-	defer c.Conn.Close()
+	s.addConnection(c)
 	//log.Printf("Completed handshake with %s\n", peer.IP)
 
-	c.SendUnchoke()
-	c.SendInterested()
+	//c.SendUnchoke()
+	//c.SendInterested()
+	//
+	//go c.ReadMessages()
+	//
+	//for pw := range s.workQueue {
+	//	if !c.PeerBitfield.HasPiece(pw.index) {
+	//		s.workQueue <- pw // Put piece back on the queue
+	//		continue
+	//	}
+	//	// Download the piece
+	//	buf, err := attemptDownloadPiece(c, pw)
+	//	if err != nil {
+	//		//log.Println("Exiting", err)
+	//		s.workQueue <- pw
+	//		continue
+	//	}
+	//
+	//	err = checkIntegrity(pw, buf)
+	//	if err != nil {
+	//		program.Send(util.ErrorMsg{TorrentId: id, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
+	//		s.workQueue <- pw
+	//		continue
+	//	}
+	//
+	//	s.bitfield.SetPiece(pw.index)
+	//	s.results <- &pieceResult{pw.index, buf}
+	//}
+}
 
-	for pw := range s.workQueue {
-		if !c.PeerBitfield.HasPiece(pw.index) {
-			s.workQueue <- pw // Put piece back on the queue
-			continue
+func (s *Session) addConnection(conn *PeerConnection) {
+	if len(s.addConnectionChan) < cap(s.addConnectionChan) {
+		select {
+		case s.addConnectionChan <- conn:
+		case <-s.closeChan:
 		}
-		// Download the piece
-		buf, err := attemptDownloadPiece(c, pw)
-		if err != nil {
-			//log.Println("Exiting", err)
-			s.workQueue <- pw
+	} else {
+		conn.Conn.Close()
+	}
+}
+
+func (s *Session) handleDownload(conn *PeerConnection) {
+
+	for {
+		select {
+		case <-s.closeChan:
+			conn.Conn.Close()
+			return
+		default:
+			for piece := range s.workQueue {
+				if !conn.PeerBitfield.HasPiece(piece.index) {
+					s.workQueue <- piece // Put piece back on the queue
+					continue
+				}
+				// Download the piece
+				buf, err := attemptDownloadPiece(conn, piece)
+				if err != nil {
+					//log.Println("Exiting", err)
+					s.workQueue <- piece
+					continue
+				}
+
+				err = checkIntegrity(piece, buf)
+				if err != nil {
+					s.workQueue <- piece
+					continue
+				}
+
+				s.bitfield.SetPiece(piece.index)
+				s.results <- &pieceResult{piece.index, buf}
+			}
+		}
+	}
+}
+
+func (s *Session) runConnection(conn *PeerConnection) {
+	for _, peer := range s.ConnectedPeers {
+		if peer.PeerID == conn.PeerID {
+			// Peer with this id is already running
+			conn.Conn.Close()
 			return
 		}
+	}
 
-		err = checkIntegrity(pw, buf)
+	if len(s.ConnectedPeers) >= MaxConnections {
+		// already have enough peer connections
+		conn.Conn.Close()
+		return
+	}
+
+	s.ConnectedPeers = append(s.ConnectedPeers, conn)
+
+	go s.handleDownload(conn)
+	go s.handleMessages(conn)
+}
+
+func (s *Session) handleMessages(c *PeerConnection) {
+	for {
+		msg, err := c.Read()
 		if err != nil {
-			program.Send(util.ErrorMsg{TorrentId: id, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
-			s.workQueue <- pw
+			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
 			continue
 		}
-
-		s.bitfield.SetPiece(pw.index)
-		s.results <- &pieceResult{pw.index, buf}
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String() + c.Conn.RemoteAddr().String()})
+		err = c.handleMessage(msg)
+		if err != nil {
+			continue
+		}
 	}
 }
 
@@ -211,27 +295,26 @@ func (s *Session) calculatePieceSize(index int) int {
 }
 
 func (s *Session) sendHaveToClients(pieceIndex int) {
-	for _, client := range s.Clients {
+	for _, client := range s.ConnectedPeers {
 		client.SendHave(pieceIndex)
 	}
 }
 
-func (s *Session) StartDownload(program *tea.Program, id int) error {
+func (s *Session) StartSession(program *tea.Program, id int) error {
 	if len(s.Peers) == 0 {
 		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
 
-		peers, err := GetPeers(&s.TrackerInfo, s.PeerID)
+		err := GetPeers(&s.TrackerInfo, s.PeerID)
 		if err != nil {
 			return err
 		}
-		s.Peers = peers
 	}
 
 	var wg sync.WaitGroup
 	var err error
 	wg.Add(1)
 	go func() {
-		err = s.Download(program, id)
+		err = s.RunSession(program, id)
 		wg.Done()
 	}()
 	wg.Wait()
@@ -247,9 +330,11 @@ func (s *Session) StopDownload() {
 	s.closeChan <- struct{}{}
 }
 
-func (s *Session) Download(program *tea.Program, id int) error {
+func (s *Session) RunSession(program *tea.Program, id int) error {
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
+	s.peerMessageChan = make(chan PeerMessage)
+	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 	s.results = make(chan *pieceResult)
 	for index, hash := range s.PieceHashes {
@@ -263,16 +348,16 @@ func (s *Session) Download(program *tea.Program, id int) error {
 
 	// Start workers
 	for _, peer := range s.Peers {
-		go s.startDownloadWorker(peer, program, id)
+		go s.startPeerConnection(peer, program, id)
 	}
 
 	// Collect results into a buffer until full
 	//donePieces := len(t.PiecesDone)
-	for len(s.PiecesDone) < len(s.PieceHashes) {
+outer:
+	for {
 		select {
-		case <-s.closeChan:
-			//close(s.workQueue)
-			return nil
+		case conn := <-s.addConnectionChan:
+			s.runConnection(conn)
 
 		case res := <-s.results:
 			begin, _ := s.calculateBoundsForPiece(res.index)
@@ -285,6 +370,10 @@ func (s *Session) Download(program *tea.Program, id int) error {
 			//}
 			s.sendHaveToClients(res.index)
 			program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(s.PiecesDone), len(s.PieceHashes))})
+
+		case <-s.closeChan:
+			//close(s.workQueue)
+			break outer
 		}
 	}
 	close(s.workQueue)

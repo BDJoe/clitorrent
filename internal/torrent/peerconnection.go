@@ -12,17 +12,22 @@ import (
 // A PeerConnection is a TCP connection with a peer
 type PeerConnection struct {
 	Conn           net.Conn
-	Choked         bool
+	AmChoked       bool
 	PeerChoked     bool
-	Interested     bool
+	AmInterested   bool
 	PeerInterested bool
-	Bitfield       *Bitfield
 	PeerBitfield   Bitfield
 	Extension
 	Metadata
-	InfoHash [20]byte
-	PeerID   [20]byte
-	Address  Peer
+	InfoHash   [20]byte
+	PeerID     [20]byte
+	Address    Peer
+	PieceState *pieceProgress
+}
+
+type PeerMessage struct {
+	peer    *PeerConnection
+	message *Message
 }
 
 func (c *PeerConnection) completeHandshake(peerID [20]byte) (*Handshake, error) {
@@ -104,12 +109,11 @@ func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerC
 	}
 	client := PeerConnection{
 		Conn:           conn,
-		Choked:         true,
+		AmChoked:       true,
 		PeerChoked:     true,
-		Interested:     false,
+		AmInterested:   false,
 		PeerInterested: false,
 		InfoHash:       infoHash,
-		Bitfield:       bitfield,
 	}
 	_, err = client.completeHandshake(peerID)
 	if err != nil {
@@ -123,9 +127,8 @@ func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerC
 		return nil, err
 	}
 
-	if len(*client.Bitfield) != bytes.Count(*client.Bitfield, []byte{0}) {
-		err = client.SendBitfield()
-		fmt.Println(client.Bitfield)
+	if len(*bitfield) != bytes.Count(*bitfield, []byte{0}) {
+		err = client.SendBitfield(bitfield)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +146,7 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, err
 	}
 	client := PeerConnection{
 		Conn:     conn,
-		Choked:   true,
+		AmChoked: true,
 		InfoHash: infoHash,
 	}
 	_, err = completeMagnetHandshake(client.Conn, infoHash, peerID)
@@ -196,9 +199,9 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 
 	switch msg.ID {
 	case MsgChoke:
-		c.Choked = true
+		c.AmChoked = true
 	case MsgUnchoke:
-		c.Choked = false
+		c.AmChoked = false
 	case MsgInterested:
 		fmt.Println(msg.String())
 		c.PeerInterested = true
@@ -221,6 +224,14 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 		}
 	case MsgExtended:
 		c.handleExtension(msg.Payload)
+	case MsgPiece:
+		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
+		if err != nil {
+			return err
+		}
+		c.PieceState.downloaded += n
+		c.PieceState.backlog--
+
 	default:
 		return fmt.Errorf("unrecognized message ID %d", msg.ID)
 	}
@@ -243,14 +254,21 @@ func (c *PeerConnection) SendRequest(index, begin, length int) error {
 	return err
 }
 
-// SendBitfield sends a Request message to the peer
-func (c *PeerConnection) SendBitfield() error {
-	req := formatBitfield(*c.Bitfield)
+// SendCancel sends a Cancel message to the peer
+func (c *PeerConnection) SendCancel(index, begin, length int) error {
+	req := formatCancel(index, begin, length)
 	_, err := c.Conn.Write(req.Serialize())
 	return err
 }
 
-// SendInterested sends an Interested message to the peer
+// SendBitfield sends a Request message to the peer
+func (c *PeerConnection) SendBitfield(bitfield *Bitfield) error {
+	req := formatBitfield(*bitfield)
+	_, err := c.Conn.Write(req.Serialize())
+	return err
+}
+
+// SendInterested sends an AmInterested message to the peer
 func (c *PeerConnection) SendInterested() error {
 	msg := Message{ID: MsgInterested}
 	_, err := c.Conn.Write(msg.Serialize())

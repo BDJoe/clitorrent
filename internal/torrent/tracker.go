@@ -20,6 +20,7 @@ type TrackerInfo struct {
 	AnnounceList [][]string
 	InfoHash     [20]byte
 	Length       int
+	Peers        []Peer
 }
 
 type bencodeTrackerResp struct {
@@ -55,14 +56,15 @@ type AnnounceResponse struct {
 // Port to listen on
 const Port uint16 = 6881
 
-func GetPeers(t *TrackerInfo, peerID [20]byte) ([]Peer, error) {
+func GetPeers(t *TrackerInfo, peerID [20]byte) error {
 	var peers []Peer
 	if len(t.AnnounceList) == 0 {
 		peers, err := t.requestPeers(t.Announce, peerID, Port)
 		if err != nil {
-			return peers, err
+			return err
 		}
-		return peers, nil
+		t.Peers = peers
+		return nil
 	}
 
 	for _, announce := range t.AnnounceList {
@@ -74,9 +76,10 @@ func GetPeers(t *TrackerInfo, peerID [20]byte) ([]Peer, error) {
 	}
 
 	if len(peers) == 0 {
-		return peers, fmt.Errorf("Failed to connect to trackers\n")
+		fmt.Errorf("Failed to connect to trackers\n")
 	}
-	return peers, nil
+	t.Peers = peers
+	return nil
 }
 
 func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16) (string, error) {

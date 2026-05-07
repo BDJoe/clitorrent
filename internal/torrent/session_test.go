@@ -19,6 +19,6 @@ func TestDownload(t *testing.T) {
 	prog := tea.Program{}
 	session, err := OpenTorrent("/home/joe/Downloads/50Matt_Dinniman___Carl_s_Doomsday_Scenario_Dungeon_Crawler_Carl__Book_.torrent", "/home/joe/Downloads/", &prog, 0)
 	require.NoError(t, err)
-	err = session.Download(&prog, 0)
+	err = session.RunSession(&prog, 0)
 	require.NoError(t, err)
 }

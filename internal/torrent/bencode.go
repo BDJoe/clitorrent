@@ -207,7 +207,6 @@ func parseCacheFile(data []byte) (*Session, error) {
 
 	session := Session{
 		TrackerInfo: tracker,
-		Peers:       []Peer{},
 		closeChan:   make(chan struct{}),
 		Seeders:     cacheFile.Seeders,
 		Leechers:    cacheFile.Leechers,

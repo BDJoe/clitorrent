@@ -188,6 +188,7 @@ func (m model) Init() tea.Cmd {
 	for i, t := range m.torrents {
 		t.Torrent.Tui = m.program
 		t.Torrent.TorrentID = i
+		t.Id = i
 		t.State = util.StateInit
 		cmds = append(cmds, func() tea.Msg {
 			return t.Spinner.Tick()
@@ -554,7 +555,7 @@ func (t *torrentModel) openMagnet(m model, id int) tea.Msg {
 }
 
 func getCache(m model) ([]*torrentModel, error) {
-	cache, err := session.GetCachedTorrents(m.program)
+	cache, err := session.GetCachedTorrents()
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +580,7 @@ func (t *torrentModel) stopDownload(m model) tea.Msg {
 func (t *torrentModel) downloadFile(m model) tea.Msg {
 	t.State = util.StateDownloading
 	go func() {
-		err := t.Torrent.StartDownload(m.program, t.Id)
+		err := t.Torrent.StartSession(m.program, t.Id)
 		if err != nil {
 			t.Status = err.Error()
 			t.Err = err.Error()

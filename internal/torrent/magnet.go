@@ -78,18 +78,17 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		return nil, err
 	}
 	track := TrackerInfo{Announce: "", AnnounceList: mag.Trackers, InfoHash: mag.InfoHash}
-	peers, err := GetPeers(&track, peerID)
+	err = GetPeers(&track, peerID)
 	if err != nil {
 		return nil, err
 	}
 
-	t, err := GetMetadata(peers, peerID, mag.InfoHash)
+	t, err := GetMetadata(track.Peers, peerID, mag.InfoHash)
 	if err != nil {
 		return nil, err
 	}
 	session := Session{
 		TrackerInfo: track,
-		Peers:       peers,
 		PeerID:      peerID,
 		closeChan:   make(chan struct{}),
 		PieceHashes: t.PieceHashes,
@@ -131,7 +130,7 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 	}
 	defer c.Conn.Close()
 	for {
-		if c.Choked {
+		if c.AmChoked {
 			err := c.SendInterested()
 			if err != nil {
 				log.Printf("%s\n", err)

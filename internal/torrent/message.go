@@ -37,6 +37,15 @@ func formatRequest(index, begin, length int) *Message {
 	return &Message{ID: MsgRequest, Payload: payload}
 }
 
+// formatCancel creates a Cancel message
+func formatCancel(index, begin, length int) *Message {
+	payload := make([]byte, 12)
+	binary.BigEndian.PutUint32(payload[0:4], uint32(index))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(begin))
+	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
+	return &Message{ID: MsgCancel, Payload: payload}
+}
+
 func formatBitfield(bitfield Bitfield) *Message {
 	return &Message{ID: MsgBitfield, Payload: bitfield}
 }
