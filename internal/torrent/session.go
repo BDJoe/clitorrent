@@ -269,10 +269,9 @@ func (s *Session) handleMessages(c *PeerConnection) {
 	for {
 		msg, err := c.Read()
 		if err != nil {
-			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
 			continue
 		}
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String() + c.Conn.RemoteAddr().String()})
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
 		err = c.handleMessage(msg)
 		if err != nil {
 			continue

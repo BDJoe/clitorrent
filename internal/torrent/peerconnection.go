@@ -115,11 +115,12 @@ func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerC
 		PeerInterested: false,
 		InfoHash:       infoHash,
 	}
-	_, err = client.completeHandshake(peerID)
+	res, err := client.completeHandshake(peerID)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	client.PeerID = res.PeerID
 
 	err = client.recvBitfield()
 	if err != nil {
@@ -149,11 +150,12 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, err
 		AmChoked: true,
 		InfoHash: infoHash,
 	}
-	_, err = completeMagnetHandshake(client.Conn, infoHash, peerID)
+	res, err := completeMagnetHandshake(client.Conn, infoHash, peerID)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	client.PeerID = res.PeerID
 
 	err = client.recvBitfield()
 	if err != nil {
