@@ -23,6 +23,7 @@ type PeerConnection struct {
 	PeerID     [20]byte
 	Address    Peer
 	PieceState *pieceProgress
+	closeChan  chan struct{}
 }
 
 type PeerMessage struct {

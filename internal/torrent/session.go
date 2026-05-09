@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gotorrent/internal/util"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,7 +27,7 @@ const MaxConnections = 50
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
 	TrackerInfo
-	ConnectedPeers    []*PeerConnection
+	ConnectedPeers    map[[20]byte]*PeerConnection
 	Seeders           uint32
 	Leechers          uint32
 	PeerID            [20]byte
@@ -41,6 +42,7 @@ type Session struct {
 	TorrentID         int
 	closeChan         chan struct{}
 	workQueue         chan *pieceWork
+	activePieces      map[int]*pieceProgress
 	results           chan *pieceResult
 	bitfield          Bitfield
 	peerMessageChan   chan PeerMessage
@@ -160,7 +162,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 	return nil
 }
 
-func (s *Session) startPeerConnection(peer Peer, program *tea.Program, id int) {
+func (s *Session) startPeerConnection(peer Peer) {
 	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
 	if err != nil {
 		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
@@ -217,6 +219,9 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 		case <-s.closeChan:
 			conn.Conn.Close()
 			return
+		case <-conn.closeChan:
+			conn.Conn.Close()
+			return
 		default:
 			for piece := range s.workQueue {
 				if !conn.PeerBitfield.HasPiece(piece.index) {
@@ -240,8 +245,15 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 				s.bitfield.SetPiece(piece.index)
 				s.results <- &pieceResult{piece.index, buf}
 			}
+			s.removePeer(conn)
+			go s.connectToPeers()
 		}
 	}
+}
+
+func (s *Session) removePeer(conn *PeerConnection) {
+	delete(s.ConnectedPeers, conn.PeerID)
+	conn.Conn.Close()
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
@@ -259,7 +271,7 @@ func (s *Session) runConnection(conn *PeerConnection) {
 		return
 	}
 
-	s.ConnectedPeers = append(s.ConnectedPeers, conn)
+	s.ConnectedPeers[conn.PeerID] = conn
 
 	go s.handleDownload(conn)
 	go s.handleMessages(conn)
@@ -267,14 +279,71 @@ func (s *Session) runConnection(conn *PeerConnection) {
 
 func (s *Session) handleMessages(c *PeerConnection) {
 	for {
-		msg, err := c.Read()
-		if err != nil {
-			continue
+		select {
+		case <-s.closeChan:
+			c.Conn.Close()
+			return
+		case <-c.closeChan:
+			c.Conn.Close()
+			return
+		default:
+			msg, err := c.Read()
+			if err != nil {
+				continue
+			}
+			s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
+			err = c.handleMessage(msg)
+			if err != nil {
+				continue
+			}
 		}
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
-		err = c.handleMessage(msg)
-		if err != nil {
-			continue
+	}
+}
+
+func (s *Session) handleSeeding() {
+	ln, err := net.Listen("tcp", ":6881")
+	defer ln.Close()
+	if err != nil {
+		return
+	}
+	for {
+		select {
+		case <-s.closeChan:
+			ln.Close()
+			return
+		default:
+			conn, err := ln.Accept()
+			if err != nil {
+				conn.Close()
+				continue
+			}
+			client := PeerConnection{
+				Conn:           conn,
+				AmChoked:       true,
+				PeerChoked:     true,
+				AmInterested:   false,
+				PeerInterested: false,
+				InfoHash:       s.InfoHash,
+			}
+			res, err := client.completeHandshake(s.PeerID)
+			if err != nil {
+				conn.Close()
+				continue
+			}
+			client.PeerID = res.PeerID
+
+			err = client.recvBitfield()
+			if err != nil {
+				conn.Close()
+				continue
+			}
+
+			err = client.SendBitfield(&s.bitfield)
+			if err != nil {
+				return
+			}
+
+			go s.handleMessages(&client)
 		}
 	}
 }
@@ -329,9 +398,17 @@ func (s *Session) StopDownload() {
 	s.closeChan <- struct{}{}
 }
 
+func (s *Session) connectToPeers() {
+	// Start workers
+	for _, peer := range s.Peers {
+		go s.startPeerConnection(peer)
+	}
+}
+
 func (s *Session) RunSession(program *tea.Program, id int) error {
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
 	// Init queues for workers to retrieve work and send results
+	s.ConnectedPeers = make(map[[20]byte]*PeerConnection)
 	s.peerMessageChan = make(chan PeerMessage)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
@@ -345,11 +422,8 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 		}
 	}
 
-	// Start workers
-	for _, peer := range s.Peers {
-		go s.startPeerConnection(peer, program, id)
-	}
-
+	go s.connectToPeers()
+	seeding := false
 	// Collect results into a buffer until full
 	//donePieces := len(t.PiecesDone)
 outer:
@@ -369,6 +443,10 @@ outer:
 			//}
 			s.sendHaveToClients(res.index)
 			program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(s.PiecesDone), len(s.PieceHashes))})
+			if len(s.PiecesDone) == len(s.PieceHashes) {
+				seeding = true
+				s.closeChan <- struct{}{}
+			}
 
 		case <-s.closeChan:
 			//close(s.workQueue)
@@ -376,6 +454,9 @@ outer:
 		}
 	}
 	close(s.workQueue)
+	if seeding {
+		s.handleSeeding()
+	}
 	return nil
 }
 
