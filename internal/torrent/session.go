@@ -24,6 +24,8 @@ const MaxBackLog = 5
 
 const MaxConnections = 50
 
+const MaxActivePieces = 5
+
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
 	TrackerInfo
@@ -217,10 +219,10 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
 		select {
 		case <-s.closeChan:
-			conn.Conn.Close()
+			s.removePeer(conn)
 			return
 		case <-conn.closeChan:
-			conn.Conn.Close()
+			s.removePeer(conn)
 			return
 		default:
 			for piece := range s.workQueue {
@@ -281,17 +283,19 @@ func (s *Session) handleMessages(c *PeerConnection) {
 	for {
 		select {
 		case <-s.closeChan:
-			c.Conn.Close()
+			s.removePeer(c)
 			return
 		case <-c.closeChan:
-			c.Conn.Close()
+			s.removePeer(c)
 			return
 		default:
 			msg, err := c.Read()
 			if err != nil {
 				continue
 			}
-			s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
+			if msg.ID == MsgInterested {
+				s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
+			}
 			err = c.handleMessage(msg)
 			if err != nil {
 				continue
