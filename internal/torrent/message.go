@@ -137,8 +137,6 @@ func sendMessage(c *PeerConnection, msg []byte) error {
 // readMessage parses a message from a stream. Returns 'nil' on keep-alive message
 func readMessage(c *PeerConnection, timeout time.Duration) (*Message, error) {
 	lengthBuf := make([]byte, 4)
-	c.Conn.SetReadDeadline(time.Now().Add(timeout))
-	defer c.Conn.SetReadDeadline(time.Time{})
 	_, err := io.ReadFull(c.Conn, lengthBuf)
 	if err != nil {
 		return nil, err

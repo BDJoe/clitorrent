@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gotorrent/internal/util"
 	"math"
+	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -40,11 +41,12 @@ type Session struct {
 	Files             []TorrentFile
 	Path              string
 	PiecesDone        []int
+	PiecesNeeded      []*pieceWork
 	Tui               *tea.Program
 	TorrentID         int
 	closeChan         chan struct{}
 	workQueue         chan *pieceWork
-	activePieces      map[int]*pieceProgress
+	activePieces      int
 	results           chan *pieceResult
 	bitfield          Bitfield
 	peerMessageChan   chan PeerMessage
@@ -215,13 +217,14 @@ func (s *Session) addConnection(conn *PeerConnection) {
 }
 
 func (s *Session) handleDownload(conn *PeerConnection) {
-
+Outer:
 	for {
+		if s.activePieces >= MaxActivePieces {
+			time.Sleep(5 * time.Second)
+			continue
+		}
 		select {
 		case <-s.closeChan:
-			s.removePeer(conn)
-			return
-		case <-conn.closeChan:
 			s.removePeer(conn)
 			return
 		default:
@@ -231,26 +234,31 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 					continue
 				}
 				// Download the piece
+				s.activePieces++
 				buf, err := attemptDownloadPiece(conn, piece)
 				if err != nil {
 					//log.Println("Exiting", err)
 					s.workQueue <- piece
+					s.activePieces--
 					continue
 				}
 
 				err = checkIntegrity(piece, buf)
 				if err != nil {
 					s.workQueue <- piece
+					s.activePieces--
 					continue
 				}
 
 				s.bitfield.SetPiece(piece.index)
 				s.results <- &pieceResult{piece.index, buf}
+				s.activePieces--
 			}
-			s.removePeer(conn)
-			go s.connectToPeers()
+			break Outer
 		}
 	}
+	s.removePeer(conn)
+	go s.connectToPeers()
 }
 
 func (s *Session) removePeer(conn *PeerConnection) {
@@ -285,10 +293,10 @@ func (s *Session) handleMessages(c *PeerConnection) {
 		case <-s.closeChan:
 			s.removePeer(c)
 			return
-		case <-c.closeChan:
-			s.removePeer(c)
-			return
 		default:
+			if c == nil {
+				return
+			}
 			msg, err := c.Read()
 			if err != nil {
 				continue
@@ -417,14 +425,8 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 	s.results = make(chan *pieceResult)
-	for index, hash := range s.PieceHashes {
-		if !slices.Contains(s.PiecesDone, index) {
-			length := s.calculatePieceSize(index)
-			s.workQueue <- &pieceWork{index, hash, length}
-		} else {
-			s.bitfield.SetPiece(index)
-		}
-	}
+	s.PiecesNeeded = make([]*pieceWork, 0)
+	s.scheduleWork()
 
 	go s.connectToPeers()
 	seeding := false
@@ -462,6 +464,26 @@ outer:
 		s.handleSeeding()
 	}
 	return nil
+}
+
+func (s *Session) scheduleWork() {
+	for index, hash := range s.PieceHashes {
+		if !slices.Contains(s.PiecesDone, index) {
+			length := s.calculatePieceSize(index)
+			s.PiecesNeeded = append(s.PiecesNeeded, &pieceWork{index: index, length: length, hash: hash})
+		} else {
+			s.bitfield.SetPiece(index)
+		}
+	}
+	length := len(s.PiecesNeeded)
+	for i := 0; i < length; i++ {
+		index := rand.Intn(length)
+		if s.PiecesNeeded[index] == nil {
+			continue
+		}
+		s.workQueue <- s.PiecesNeeded[index]
+		length = len(s.PiecesNeeded)
+	}
 }
 
 func getCompletePercentage(done int, total int) float64 {
