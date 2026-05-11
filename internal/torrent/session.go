@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"gotorrent/internal/util"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -46,7 +46,7 @@ type Session struct {
 	TorrentID         int
 	closeChan         chan struct{}
 	workQueue         chan *pieceWork
-	activePieces      int
+	activePieces      chan *pieceWork
 	results           chan *pieceResult
 	bitfield          Bitfield
 	peerMessageChan   chan PeerMessage
@@ -70,52 +70,6 @@ type pieceProgress struct {
 	downloaded int
 	requested  int
 	backlog    int
-}
-
-func (c *PeerConnection) readMessage() error {
-	msg, err := c.Read() // this call blocks
-	if err != nil {
-		return err
-	}
-
-	if msg == nil { // keep-alive
-		return nil
-	}
-
-	switch msg.ID {
-	case MsgChoke:
-		c.AmChoked = true
-	case MsgUnchoke:
-		c.AmChoked = false
-	case MsgInterested:
-		c.PeerInterested = true
-		c.SendUnchoke()
-	case MsgNotInterested:
-		c.PeerInterested = false
-	case MsgHave:
-		index, err := parseHave(msg)
-		if err != nil {
-			return err
-		}
-		c.PeerBitfield.SetPiece(index)
-	case MsgBitfield:
-		c.PeerBitfield = msg.Payload
-	case MsgRequest:
-		err := c.HandleRequest(msg)
-		if err != nil {
-			return err
-		}
-	case MsgPiece:
-		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
-		if err != nil {
-			return err
-		}
-		c.PieceState.downloaded += n
-		c.PieceState.backlog--
-	case MsgExtended:
-		c.handleExtension(msg.Payload)
-	}
-	return nil
 }
 
 func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
@@ -173,36 +127,6 @@ func (s *Session) startPeerConnection(peer Peer) {
 		return
 	}
 	s.addConnection(c)
-	//log.Printf("Completed handshake with %s\n", peer.IP)
-
-	//c.SendUnchoke()
-	//c.SendInterested()
-	//
-	//go c.ReadMessages()
-	//
-	//for pw := range s.workQueue {
-	//	if !c.PeerBitfield.HasPiece(pw.index) {
-	//		s.workQueue <- pw // Put piece back on the queue
-	//		continue
-	//	}
-	//	// Download the piece
-	//	buf, err := attemptDownloadPiece(c, pw)
-	//	if err != nil {
-	//		//log.Println("Exiting", err)
-	//		s.workQueue <- pw
-	//		continue
-	//	}
-	//
-	//	err = checkIntegrity(pw, buf)
-	//	if err != nil {
-	//		program.Send(util.ErrorMsg{TorrentId: id, Err: fmt.Sprintf("Index %d failed integrity check", pw.index)})
-	//		s.workQueue <- pw
-	//		continue
-	//	}
-	//
-	//	s.bitfield.SetPiece(pw.index)
-	//	s.results <- &pieceResult{pw.index, buf}
-	//}
 }
 
 func (s *Session) addConnection(conn *PeerConnection) {
@@ -217,56 +141,57 @@ func (s *Session) addConnection(conn *PeerConnection) {
 }
 
 func (s *Session) handleDownload(conn *PeerConnection) {
-Outer:
 	for {
-		if s.activePieces >= MaxActivePieces {
-			time.Sleep(5 * time.Second)
-			continue
+		if len(s.workQueue) <= 0 {
+			s.removePeer(conn)
+			return
 		}
 		select {
 		case <-s.closeChan:
 			s.removePeer(conn)
 			return
-		default:
-			for piece := range s.workQueue {
-				if !conn.PeerBitfield.HasPiece(piece.index) {
-					s.workQueue <- piece // Put piece back on the queue
-					continue
-				}
-				// Download the piece
-				s.activePieces++
-				buf, err := attemptDownloadPiece(conn, piece)
-				if err != nil {
-					//log.Println("Exiting", err)
-					s.workQueue <- piece
-					s.activePieces--
-					continue
-				}
-
-				err = checkIntegrity(piece, buf)
-				if err != nil {
-					s.workQueue <- piece
-					s.activePieces--
-					continue
-				}
-
-				s.bitfield.SetPiece(piece.index)
-				s.results <- &pieceResult{piece.index, buf}
-				s.activePieces--
+		case piece := <-s.activePieces:
+			if !conn.PeerBitfield.HasPiece(piece.index) {
+				s.workQueue <- piece // Put piece back on the queue
+				s.removePeer(conn)
+				return
 			}
-			break Outer
+			// Download the piece
+			buf, err := attemptDownloadPiece(conn, piece)
+			if err != nil {
+				//log.Println("Exiting", err)
+				s.workQueue <- piece
+				continue
+			}
+
+			err = checkIntegrity(piece, buf)
+			if err != nil {
+				s.workQueue <- piece
+				continue
+			}
+
+			s.bitfield.SetPiece(piece.index)
+			s.results <- &pieceResult{piece.index, buf}
 		}
 	}
-	s.removePeer(conn)
-	go s.connectToPeers()
 }
 
 func (s *Session) removePeer(conn *PeerConnection) {
-	delete(s.ConnectedPeers, conn.PeerID)
+	_, ok := s.ConnectedPeers[conn.PeerID]
+	if !ok {
+		conn.Conn.Close()
+		return
+	}
 	conn.Conn.Close()
+	delete(s.ConnectedPeers, conn.PeerID)
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
+	if conn.PeerID == s.PeerID {
+		conn.Conn.Close()
+		return
+	}
+
 	for _, peer := range s.ConnectedPeers {
 		if peer.PeerID == conn.PeerID {
 			// Peer with this id is already running
@@ -281,35 +206,15 @@ func (s *Session) runConnection(conn *PeerConnection) {
 		return
 	}
 
+	if !s.setInterested(conn) {
+		conn.Conn.Close()
+		return
+	}
+
 	s.ConnectedPeers[conn.PeerID] = conn
 
 	go s.handleDownload(conn)
-	go s.handleMessages(conn)
-}
-
-func (s *Session) handleMessages(c *PeerConnection) {
-	for {
-		select {
-		case <-s.closeChan:
-			s.removePeer(c)
-			return
-		default:
-			if c == nil {
-				return
-			}
-			msg, err := c.Read()
-			if err != nil {
-				continue
-			}
-			if msg.ID == MsgInterested {
-				s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
-			}
-			err = c.handleMessage(msg)
-			if err != nil {
-				continue
-			}
-		}
-	}
+	go conn.peerListener(s.peerMessageChan)
 }
 
 func (s *Session) handleSeeding() {
@@ -355,7 +260,7 @@ func (s *Session) handleSeeding() {
 				return
 			}
 
-			go s.handleMessages(&client)
+			go client.peerListener(s.peerMessageChan)
 		}
 	}
 }
@@ -424,19 +329,29 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 	s.peerMessageChan = make(chan PeerMessage)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
+	s.activePieces = make(chan *pieceWork, MaxActivePieces)
 	s.results = make(chan *pieceResult)
 	s.PiecesNeeded = make([]*pieceWork, 0)
 	s.scheduleWork()
 
 	go s.connectToPeers()
 	seeding := false
-	// Collect results into a buffer until full
-	//donePieces := len(t.PiecesDone)
+
 outer:
 	for {
+		for len(s.activePieces) < MaxActivePieces {
+			piece := <-s.workQueue
+			s.activePieces <- piece
+		}
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)
+
+		case msg := <-s.peerMessageChan:
+			err := s.handleMessage(msg.message, msg.peer)
+			if err != nil {
+				s.removePeer(msg.peer)
+			}
 
 		case res := <-s.results:
 			begin, _ := s.calculateBoundsForPiece(res.index)
@@ -460,10 +375,78 @@ outer:
 		}
 	}
 	close(s.workQueue)
+	close(s.activePieces)
 	if seeding {
 		s.handleSeeding()
 	}
 	return nil
+}
+
+func (s *Session) requestPiece(c *PeerConnection) {
+	for piece := range s.activePieces {
+		if c.PeerBitfield.HasPiece(piece.index) {
+			attemptDownloadPiece(c, piece)
+		}
+	}
+}
+
+func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
+	if msg == nil { // keep-alive
+		return nil
+	}
+
+	s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
+
+	switch msg.ID {
+	case MsgChoke:
+		c.AmChoked = true
+	case MsgUnchoke:
+		c.AmChoked = false
+	case MsgInterested:
+		fmt.Println(msg.String())
+		c.PeerInterested = true
+		c.SendUnchoke()
+	case MsgNotInterested:
+		c.PeerInterested = false
+	case MsgHave:
+		index, err := parseHave(msg)
+		if err != nil {
+			return err
+		}
+		c.PeerBitfield.SetPiece(index)
+	case MsgBitfield:
+		c.PeerBitfield = msg.Payload
+
+	case MsgRequest:
+		fmt.Println(msg.String())
+		err := c.HandleRequest(msg)
+		if err != nil {
+			return err
+		}
+	case MsgExtended:
+		c.handleExtension(msg.Payload)
+	case MsgPiece:
+		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
+		if err != nil {
+			return err
+		}
+		c.PieceState.downloaded += n
+		c.PieceState.backlog--
+	default:
+		return fmt.Errorf("unrecognized message ID %d", msg.ID)
+	}
+	return nil
+}
+
+func (s *Session) setInterested(c *PeerConnection) bool {
+	for _, piece := range s.PiecesNeeded {
+		if c.PeerBitfield.HasPiece(piece.index) {
+			c.AmInterested = true
+			c.SendInterested()
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Session) scheduleWork() {
@@ -475,14 +458,11 @@ func (s *Session) scheduleWork() {
 			s.bitfield.SetPiece(index)
 		}
 	}
-	length := len(s.PiecesNeeded)
-	for i := 0; i < length; i++ {
-		index := rand.Intn(length)
-		if s.PiecesNeeded[index] == nil {
-			continue
-		}
-		s.workQueue <- s.PiecesNeeded[index]
-		length = len(s.PiecesNeeded)
+	rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
+		s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
+	})
+	for _, piece := range s.PiecesNeeded {
+		s.workQueue <- piece
 	}
 }
 

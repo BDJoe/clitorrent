@@ -97,6 +97,7 @@ func (c *PeerConnection) recvBitfield() error {
 		return err
 	}
 	c.PeerBitfield = msg.Payload
+
 	return nil
 }
 
@@ -238,6 +239,20 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 		return fmt.Errorf("unrecognized message ID %d", msg.ID)
 	}
 	return nil
+}
+
+func (c *PeerConnection) peerListener(msgChan chan PeerMessage) {
+	for {
+		if c == nil {
+			return
+		}
+		msg, err := c.Read()
+		if err != nil {
+			break
+		}
+		msgChan <- PeerMessage{c, msg}
+	}
+	msgChan <- PeerMessage{c, nil}
 }
 
 func (c *PeerConnection) HandleRequest(m *Message) error {
