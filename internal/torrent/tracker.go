@@ -21,6 +21,9 @@ type TrackerInfo struct {
 	InfoHash     [20]byte
 	Length       int
 	Peers        []Peer
+	Downloaded   int
+	Uploaded     int
+	Left         int
 }
 
 type bencodeTrackerResp struct {
@@ -37,7 +40,7 @@ type AnnounceRequest struct {
 	Downloaded    uint64
 	Left          uint64
 	Uploaded      uint64
-	Event         uint32
+	Event         TrackerEvent
 	Ipaddr        uint32
 	Key           uint32
 	NumWant       int32
@@ -53,13 +56,30 @@ type AnnounceResponse struct {
 	Peers         []Peer
 }
 
+type TrackerEvent uint32
+
+const (
+	EventNone TrackerEvent = iota
+	EventCompleted
+	EventStarted
+	EventStopped
+)
+
 // Port to listen on
 const Port uint16 = 6881
 
-func GetPeers(t *TrackerInfo, peerID [20]byte) error {
+func (t *TrackerInfo) sendAnnounce(event TrackerEvent, s *Session) error {
+	err := GetPeers(t, s.PeerID, event)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
 	var peers []Peer
 	if len(t.AnnounceList) == 0 {
-		peers, err := t.requestPeers(t.Announce, peerID, Port)
+		peers, err := t.requestPeers(t.Announce, peerID, Port, event)
 		if err != nil {
 			return err
 		}
@@ -67,12 +87,13 @@ func GetPeers(t *TrackerInfo, peerID [20]byte) error {
 		return nil
 	}
 
-	for _, announce := range t.AnnounceList {
-		newPeers, err := t.requestPeers(announce[0], peerID, Port)
+	for _, path := range t.AnnounceList {
+		newPeers, err := t.requestPeers(path[0], peerID, Port, event)
 		if err != nil {
 			continue
 		}
 		peers = append(peers, newPeers...)
+
 	}
 
 	if len(peers) == 0 {
@@ -82,10 +103,19 @@ func GetPeers(t *TrackerInfo, peerID [20]byte) error {
 	return nil
 }
 
-func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16) (string, error) {
+func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uint16, event TrackerEvent) (string, error) {
 	base, err := url.Parse(announce)
 	if err != nil {
 		return "", err
+	}
+	var eventStr string
+	switch event {
+	case EventStarted:
+		eventStr = "started"
+	case EventCompleted:
+		eventStr = "completed"
+	case EventStopped:
+		eventStr = "stopped"
 	}
 	params := url.Values{
 		"info_hash":  []string{string(t.InfoHash[:])},
@@ -94,46 +124,46 @@ func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 		"uploaded":   []string{"0"},
 		"downloaded": []string{"0"},
 		"compact":    []string{"1"},
-		"left":       []string{strconv.Itoa(t.Length)},
-		"event":      []string{"2"},
+		"left":       []string{strconv.Itoa(t.Left)},
+		"event":      []string{eventStr},
 	}
 	base.RawQuery = params.Encode()
 	return base.String(), nil
 }
 
-func (t *TrackerInfo) requestPeers(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
-	url, err := url.Parse(announce)
+func (t *TrackerInfo) requestPeers(announce string, peerID [20]byte, port uint16, event TrackerEvent) ([]Peer, error) {
+	path, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
 	}
-	peers := []Peer{}
+	var peers []Peer
 
-	switch url.Scheme {
+	switch path.Scheme {
 	case "http":
-		peers, err = t.requestPeersHTML(announce, peerID, port)
+		peers, err = t.requestPeersHTML(announce, peerID, port, event)
 		if err != nil {
 			return nil, err
 		}
 	case "udp":
-		peers, err = t.requestPeersUDP(announce, peerID, port)
+		peers, err = t.requestPeersUDP(announce, peerID, port, event)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("Invalid Announce Scheme")
+		return nil, fmt.Errorf("invalid Announce Scheme")
 	}
 
 	return peers, nil
 }
 
-func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
-	url, err := t.buildTrackerURL(announce, peerID, port)
+func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port uint16, event TrackerEvent) ([]Peer, error) {
+	path, err := t.buildTrackerURL(announce, peerID, port, event)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &http.Client{Timeout: 10 * time.Second}
-	resp, err := c.Get(url)
+	resp, err := c.Get(path)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +179,7 @@ func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 	return unmarshalPeers([]byte(trackerResp.Peers))
 }
 
-func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16) ([]Peer, error) {
+func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uint16, event TrackerEvent) ([]Peer, error) {
 	address, err := url.Parse(announce)
 	if err != nil {
 		return nil, err
@@ -190,13 +220,13 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 
 	r := AnnounceRequest{
 		InfoHash:      t.InfoHash,
-		Left:          1,
+		Left:          uint64(t.Left),
 		NumWant:       -1,
 		Port:          port,
 		connectionId:  connId,
 		transactionId: transId,
 		PeerId:        peerID,
-		Event:         2,
+		Event:         event,
 	}
 
 	a := createAnnounceReq(r)
@@ -244,7 +274,7 @@ func createAnnounceReq(r AnnounceRequest) []byte {
 	binary.BigEndian.PutUint64(buf[56:], r.Downloaded)      // 8 bytes
 	binary.BigEndian.PutUint64(buf[64:], r.Left)            // 8 bytes
 	binary.BigEndian.PutUint64(buf[72:], r.Uploaded)        // 8 bytes
-	binary.BigEndian.PutUint32(buf[76:], r.Event)           // Event, none = 0 completed = 1 started = 2 stopped = 3
+	binary.BigEndian.PutUint32(buf[76:], uint32(r.Event))   // Event, none = 0 completed = 1 started = 2 stopped = 3
 	binary.BigEndian.PutUint32(buf[80:], 0)                 // 4 bytes
 	binary.BigEndian.PutUint32(buf[84:], r.Ipaddr)          // 4 bytes
 	binary.BigEndian.PutUint32(buf[88:], r.Key)             // 4 bytes

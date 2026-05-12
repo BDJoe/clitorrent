@@ -25,7 +25,7 @@ const MaxBackLog = 5
 
 const MaxConnections = 50
 
-const MaxActivePieces = 5
+const MaxActivePieces = 15
 
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
@@ -179,7 +179,6 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 func (s *Session) removePeer(conn *PeerConnection) {
 	_, ok := s.ConnectedPeers[conn.PeerID]
 	if !ok {
-		conn.Conn.Close()
 		return
 	}
 	conn.Conn.Close()
@@ -218,6 +217,10 @@ func (s *Session) runConnection(conn *PeerConnection) {
 }
 
 func (s *Session) handleSeeding() {
+	err := s.TrackerInfo.sendAnnounce(EventCompleted, s)
+	if err != nil {
+		return
+	}
 	ln, err := net.Listen("tcp", ":6881")
 	defer ln.Close()
 	if err != nil {
@@ -289,7 +292,7 @@ func (s *Session) StartSession(program *tea.Program, id int) error {
 	if len(s.Peers) == 0 {
 		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
 
-		err := GetPeers(&s.TrackerInfo, s.PeerID)
+		err := GetPeers(&s.TrackerInfo, s.PeerID, EventStarted)
 		if err != nil {
 			return err
 		}
@@ -323,7 +326,7 @@ func (s *Session) connectToPeers() {
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Downloading"})
+	program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Peers: %d", len(s.Peers))})
 	// Init queues for workers to retrieve work and send results
 	s.ConnectedPeers = make(map[[20]byte]*PeerConnection)
 	s.peerMessageChan = make(chan PeerMessage)
@@ -350,7 +353,7 @@ outer:
 		case msg := <-s.peerMessageChan:
 			err := s.handleMessage(msg.message, msg.peer)
 			if err != nil {
-				s.removePeer(msg.peer)
+				break
 			}
 
 		case res := <-s.results:
@@ -504,6 +507,7 @@ func (s *Session) initFile() error {
 		}
 	}
 	if buf != nil {
+		s.TrackerInfo.Left = s.Length - len(buf)
 		err = s.getCache(buf)
 		if err != nil {
 			return err

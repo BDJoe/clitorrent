@@ -78,7 +78,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		return nil, err
 	}
 	track := TrackerInfo{Announce: "", AnnounceList: mag.Trackers, InfoHash: mag.InfoHash}
-	err = GetPeers(&track, peerID)
+	err = GetPeers(&track, peerID, EventStarted)
 	if err != nil {
 		return nil, err
 	}
