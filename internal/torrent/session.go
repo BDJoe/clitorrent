@@ -82,8 +82,8 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 
 	// Setting a deadline helps get unresponsive peers unstuck.
 	// 30 seconds is more than enough time to download a 262 KB piece
-	c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
+	//c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
+	//defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for state.downloaded < pw.length {
 		if c.AmChoked {
@@ -142,7 +142,7 @@ func (s *Session) addConnection(conn *PeerConnection) {
 
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
-		if len(s.workQueue) <= 0 {
+		if len(s.PiecesDone) == len(s.PieceHashes) {
 			s.removePeer(conn)
 			return
 		}
@@ -172,6 +172,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 
 			s.bitfield.SetPiece(piece.index)
 			s.results <- &pieceResult{piece.index, buf}
+		default:
 		}
 	}
 }
@@ -212,8 +213,8 @@ func (s *Session) runConnection(conn *PeerConnection) {
 
 	s.ConnectedPeers[conn.PeerID] = conn
 
-	go s.handleDownload(conn)
 	go conn.peerListener(s.peerMessageChan)
+	go s.handleDownload(conn)
 }
 
 func (s *Session) handleSeeding() {
@@ -320,8 +321,17 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for _, peer := range s.Peers {
-		go s.startPeerConnection(peer)
+	for {
+		if len(s.PiecesDone) == len(s.PieceHashes) {
+			return
+		}
+		if len(s.ConnectedPeers) >= MaxConnections {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		for _, peer := range s.Peers {
+			go s.startPeerConnection(peer)
+		}
 	}
 }
 
@@ -342,13 +352,12 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 
 outer:
 	for {
-		for len(s.activePieces) < MaxActivePieces {
-			piece := <-s.workQueue
-			s.activePieces <- piece
-		}
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)
+
+		case piece := <-s.workQueue:
+			s.activePieces <- piece
 
 		case msg := <-s.peerMessageChan:
 			err := s.handleMessage(msg.message, msg.peer)
