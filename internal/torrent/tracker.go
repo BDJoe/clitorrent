@@ -77,7 +77,6 @@ func (t *TrackerInfo) sendAnnounce(event TrackerEvent, s *Session) error {
 }
 
 func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
-	var peers []Peer
 	if len(t.AnnounceList) == 0 {
 		peers, err := t.requestPeers(t.Announce, peerID, Port, event)
 		if err != nil {
@@ -86,7 +85,7 @@ func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
 		t.Peers = peers
 		return nil
 	}
-
+	peers := make([]Peer, 0)
 	for _, announce := range t.AnnounceList {
 		newPeers, err := t.requestPeers(announce[0], peerID, Port, event)
 		if err != nil {
@@ -164,7 +163,7 @@ func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 		return nil, err
 	}
 
-	c := &http.Client{Timeout: 10 * time.Second}
+	c := &http.Client{Timeout: 30 * time.Second}
 	resp, err := c.Get(path)
 	if err != nil {
 		return nil, err

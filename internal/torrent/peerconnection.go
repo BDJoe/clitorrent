@@ -81,10 +81,10 @@ func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handsha
 }
 
 func (c *PeerConnection) recvBitfield() error {
-	c.Conn.SetDeadline(time.Now().Add(5 * time.Second))
+	c.Conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
-	msg, err := readMessage(c, 5*time.Second)
+	msg, err := c.Read()
 	if err != nil {
 		return err
 	}

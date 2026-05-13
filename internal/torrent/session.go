@@ -25,7 +25,7 @@ const MaxBackLog = 5
 
 const MaxConnections = 50
 
-const MaxActivePieces = 15
+const MaxActivePieces = 10
 
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
@@ -82,8 +82,8 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 
 	// Setting a deadline helps get unresponsive peers unstuck.
 	// 30 seconds is more than enough time to download a 262 KB piece
-	c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
+	//c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
+	//defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for state.downloaded < pw.length {
 		if c.AmChoked {
@@ -149,8 +149,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 		case piece := <-s.activePieces:
 			if !conn.PeerBitfield.HasPiece(piece.index) {
 				s.workQueue <- piece // Put piece back on the queue
-				s.removePeer(conn)
-				return
+				continue
 			}
 			// Download the piece
 			buf, err := attemptDownloadPiece(conn, piece)
@@ -169,6 +168,8 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			s.bitfield.SetPiece(piece.index)
 			s.results <- &pieceResult{piece.index, buf}
 		default:
+			time.Sleep(1 * time.Second)
+			continue
 		}
 	}
 }
@@ -287,8 +288,11 @@ func (s *Session) sendHaveToClients(pieceIndex int) {
 
 func (s *Session) StartSession(program *tea.Program, id int) error {
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
-
-	err := GetPeers(&s.TrackerInfo, s.PeerID, EventStarted)
+	peerId, err := generatePeerID()
+	if err != nil {
+		fmt.Println("Failed to generate peer ID")
+	}
+	err = GetPeers(&s.TrackerInfo, peerId, EventStarted)
 	if err != nil {
 		return err
 	}
@@ -338,6 +342,9 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 
 outer:
 	for {
+		if len(s.ConnectedPeers) > MaxConnections {
+			s.connectToPeers()
+		}
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)
