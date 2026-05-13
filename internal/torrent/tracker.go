@@ -163,7 +163,7 @@ func (t *TrackerInfo) requestPeersHTML(announce string, peerID [20]byte, port ui
 		return nil, err
 	}
 
-	c := &http.Client{Timeout: 30 * time.Second}
+	c := &http.Client{Timeout: 10 * time.Second}
 	resp, err := c.Get(path)
 	if err != nil {
 		return nil, err
@@ -190,6 +190,10 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 	udpAddr, err := net.ResolveUDPAddr("udp", address.Host)
 	if err != nil {
 		return nil, err
+	}
+
+	if udpAddr.IP.String() == "127.0.0.1" {
+		return nil, fmt.Errorf("UDP address is localhost")
 	}
 
 	conn, err := net.DialUDP("udp", nil, udpAddr)
@@ -236,7 +240,7 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 
 	_, err = conn.Write(a[:])
 
-	conn.SetDeadline(time.Now().Add(time.Second * 10))
+	conn.SetDeadline(time.Now().Add(time.Second * 5))
 
 	newBuf := make([]byte, 1024)
 	n, err = bufio.NewReader(conn).Read(newBuf)
@@ -301,7 +305,7 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 		interval:      binary.BigEndian.Uint32(b[8:]),
 		leechers:      binary.BigEndian.Uint32(b[12:]),
 		seeders:       binary.BigEndian.Uint32(b[16:]),
-		Peers:         []Peer{},
+		Peers:         make([]Peer, peerList),
 	}
 
 	// trackerResp := bencodeTrackerResp{}
@@ -316,7 +320,6 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 	// 	return AnnounceResponse{}, err
 	// }
 	// rv.Peers = p
-	p := make([]Peer, peerList)
 	// for i := range numPeers {
 	// 	offset := i * peerSize
 	// 	peers[i].IP = net.IP(peersBin[offset : offset+4])
@@ -324,10 +327,9 @@ func parseAnnounceResponse(b []byte, l int) (AnnounceResponse, error) {
 	// }
 	for i := 0; i < peerList; i++ {
 		offset := 20 + 6*i
-		p[i].IP = net.IP(b[offset : offset+4])
-		p[i].Port = binary.BigEndian.Uint16(b[offset+4 : offset+6])
+		rv.Peers[i].IP = net.IP(b[offset : offset+4])
+		rv.Peers[i].Port = binary.BigEndian.Uint16(b[offset+4 : offset+6])
 		//fmt.Println(p[i].IP)
 	}
-	rv.Peers = p
 	return rv, nil
 }

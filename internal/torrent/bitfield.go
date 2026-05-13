@@ -6,8 +6,8 @@ import "math"
 type Bitfield []byte
 
 func newBitfield(length int) Bitfield {
-	numBytes := int(math.Ceil(float64(length / 8.0)))
-	bf := make([]byte, numBytes)
+	numBytes := int(math.Ceil(float64(length) / 8.0))
+	bf := make([]byte, 0, numBytes)
 	return bf
 }
 

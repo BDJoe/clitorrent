@@ -7,7 +7,6 @@ import (
 	"gotorrent/internal/util"
 	"math"
 	"math/rand/v2"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -121,7 +120,11 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (s *Session) startPeerConnection(peer Peer) {
-	c, _ := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
+	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
+	if err != nil {
+		s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+		return
+	}
 	s.addConnection(c)
 }
 
@@ -177,6 +180,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 func (s *Session) removePeer(conn *PeerConnection) {
 	_, ok := s.ConnectedPeers[conn.PeerID]
 	if !ok {
+		conn.Conn.Close()
 		return
 	}
 	conn.Conn.Close()
@@ -210,61 +214,76 @@ func (s *Session) runConnection(conn *PeerConnection) {
 
 	s.ConnectedPeers[conn.PeerID] = conn
 
-	go conn.peerListener(s.peerMessageChan)
+	go s.handleMessages(conn)
 	go s.handleDownload(conn)
 }
 
-func (s *Session) handleSeeding() {
-	err := s.TrackerInfo.sendAnnounce(EventCompleted, s)
-	if err != nil {
-		return
-	}
-	ln, err := net.Listen("tcp", ":6881")
-	defer ln.Close()
-	if err != nil {
-		return
-	}
+func (s *Session) handleMessages(c *PeerConnection) {
 	for {
-		select {
-		case <-s.closeChan:
-			ln.Close()
-			return
-		default:
-			conn, err := ln.Accept()
-			if err != nil {
-				conn.Close()
-				continue
-			}
-			client := PeerConnection{
-				Conn:           conn,
-				AmChoked:       true,
-				PeerChoked:     true,
-				AmInterested:   false,
-				PeerInterested: false,
-				InfoHash:       s.InfoHash,
-			}
-			res, err := client.completeHandshake(s.PeerID)
-			if err != nil {
-				conn.Close()
-				continue
-			}
-			client.PeerID = res.PeerID
-
-			err = client.recvBitfield()
-			if err != nil {
-				conn.Close()
-				continue
-			}
-
-			err = client.SendBitfield(&s.bitfield)
-			if err != nil {
-				return
-			}
-
-			go client.peerListener(s.peerMessageChan)
+		msg, err := c.Read()
+		if err != nil {
+			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+			continue
+		}
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String() + c.Conn.RemoteAddr().String()})
+		err = c.handleMessage(msg)
+		if err != nil {
+			continue
 		}
 	}
 }
+
+//func (s *Session) handleSeeding() {
+//	err := s.TrackerInfo.sendAnnounce(EventCompleted, s)
+//	if err != nil {
+//		return
+//	}
+//	ln, err := net.Listen("tcp", ":6881")
+//	defer ln.Close()
+//	if err != nil {
+//		return
+//	}
+//	for {
+//		select {
+//		case <-s.closeChan:
+//			ln.Close()
+//			return
+//		default:
+//			conn, err := ln.Accept()
+//			if err != nil {
+//				conn.Close()
+//				continue
+//			}
+//			client := PeerConnection{
+//				Conn:           conn,
+//				AmChoked:       true,
+//				PeerChoked:     true,
+//				AmInterested:   false,
+//				PeerInterested: false,
+//				InfoHash:       s.InfoHash,
+//			}
+//			res, err := client.completeHandshake(s.PeerID)
+//			if err != nil {
+//				conn.Close()
+//				continue
+//			}
+//			client.PeerID = res.PeerID
+//
+//			err = client.recvBitfield()
+//			if err != nil {
+//				conn.Close()
+//				continue
+//			}
+//
+//			err = client.SendBitfield(&s.bitfield)
+//			if err != nil {
+//				return
+//			}
+//
+//			go client.peerListener(s.peerMessageChan)
+//		}
+//	}
+//}
 
 func (s *Session) calculateBoundsForPiece(index int) (begin int, end int) {
 	begin = index * s.PieceLength
@@ -287,16 +306,14 @@ func (s *Session) sendHaveToClients(pieceIndex int) {
 }
 
 func (s *Session) StartSession(program *tea.Program, id int) error {
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
-	peerId, err := generatePeerID()
-	if err != nil {
-		fmt.Println("Failed to generate peer ID")
+	if len(s.Peers) == 0 {
+		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
+		err := GetPeers(&s.TrackerInfo, s.PeerID, EventStarted)
+		if err != nil {
+			return err
+		}
 	}
-	err = GetPeers(&s.TrackerInfo, peerId, EventStarted)
-	if err != nil {
-		return err
-	}
-
+	var err error
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -318,10 +335,15 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for _, peer := range s.Peers {
-		s.startPeerConnection(peer)
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
-
+	for {
+		for _, peer := range s.Peers {
+			if len(s.ConnectedPeers) >= MaxConnections {
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			go s.startPeerConnection(peer)
+			s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
+		}
 	}
 }
 
@@ -338,13 +360,10 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 	s.scheduleWork()
 
 	go s.connectToPeers()
-	seeding := false
+	//seeding := false
 
 outer:
 	for {
-		if len(s.ConnectedPeers) > MaxConnections {
-			s.connectToPeers()
-		}
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)
@@ -370,7 +389,7 @@ outer:
 			s.sendHaveToClients(res.index)
 			program.Send(util.ProgressMsg{TorrentId: id, Progress: getCompletePercentage(len(s.PiecesDone), len(s.PieceHashes))})
 			if len(s.PiecesDone) == len(s.PieceHashes) {
-				seeding = true
+				//seeding = true
 				s.closeChan <- struct{}{}
 			}
 
@@ -381,9 +400,9 @@ outer:
 	}
 	close(s.workQueue)
 	close(s.activePieces)
-	if seeding {
-		s.handleSeeding()
-	}
+	//if seeding {
+	//	s.handleSeeding()
+	//}
 	return nil
 }
 

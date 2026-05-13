@@ -31,18 +31,15 @@ type PeerMessage struct {
 }
 
 func (c *PeerConnection) completeHandshake(peerID [20]byte) (*Handshake, error) {
-	c.Conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	req := newHandshake(c.InfoHash, peerID)
 	_, err := c.Conn.Write(req.Serialize())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to write handshake: %v", err)
 	}
-
 	res, err := readHandshake(c.Conn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to read handshake: %v", err)
 	}
 	if !bytes.Equal(res.InfoHash[:], c.InfoHash[:]) {
 		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
@@ -52,9 +49,6 @@ func (c *PeerConnection) completeHandshake(peerID [20]byte) (*Handshake, error) 
 }
 
 func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, error) {
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	defer conn.SetDeadline((time.Time{})) // Disable the deadline
-
 	req := newHandshake(infohash, peerID)
 	_, err := conn.Write(req.SerializeMagnetHandshake())
 	if err != nil {
@@ -81,10 +75,8 @@ func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handsha
 }
 
 func (c *PeerConnection) recvBitfield() error {
-	c.Conn.SetDeadline(time.Now().Add(10 * time.Second))
-	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
-	msg, err := c.Read()
+	msg, err := readMessage(c, 5*time.Second)
 	if err != nil {
 		return err
 	}
@@ -104,7 +96,7 @@ func (c *PeerConnection) recvBitfield() error {
 // New connects with a peer, completes a handshake, and receives a handshake
 // returns an err if any of those fail
 func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerConnection, error) {
-	conn, err := net.DialTimeout("tcp", peer.String(), 10*time.Second)
+	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +134,7 @@ func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerC
 // New connects with a peer, completes a handshake, and receives a handshake
 // returns an err if any of those fail
 func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, error) {
-	conn, err := net.DialTimeout("tcp", peer.String(), 1*time.Second)
+	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +161,7 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, err
 
 // Read reads and consumes a message from the connection
 func (c *PeerConnection) Read() (*Message, error) {
-	msg, err := readMessage(c, 5*time.Second)
+	msg, err := readMessage(c, 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
