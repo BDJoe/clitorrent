@@ -82,8 +82,8 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 
 	// Setting a deadline helps get unresponsive peers unstuck.
 	// 30 seconds is more than enough time to download a 262 KB piece
-	//c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-	//defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
+	c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
+	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for state.downloaded < pw.length {
 		if c.AmChoked {
@@ -121,11 +121,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (s *Session) startPeerConnection(peer Peer) {
-	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
-	if err != nil {
-		//log.Printf("Could not handshake with %s. Disconnecting\n", peer.IP)
-		return
-	}
+	c, _ := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
 	s.addConnection(c)
 }
 
@@ -187,10 +183,10 @@ func (s *Session) removePeer(conn *PeerConnection) {
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
-	if conn.PeerID == s.PeerID {
-		conn.Conn.Close()
-		return
-	}
+	//if conn.PeerID == s.PeerID {
+	//	conn.Conn.Close()
+	//	return
+	//}
 
 	for _, peer := range s.ConnectedPeers {
 		if peer.PeerID == conn.PeerID {
@@ -290,17 +286,14 @@ func (s *Session) sendHaveToClients(pieceIndex int) {
 }
 
 func (s *Session) StartSession(program *tea.Program, id int) error {
-	if len(s.Peers) == 0 {
-		program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
+	program.Send(util.StatusMsg{TorrentId: id, Status: "Connecting to peers"})
 
-		err := GetPeers(&s.TrackerInfo, s.PeerID, EventStarted)
-		if err != nil {
-			return err
-		}
+	err := GetPeers(&s.TrackerInfo, s.PeerID, EventStarted)
+	if err != nil {
+		return err
 	}
 
 	var wg sync.WaitGroup
-	var err error
 	wg.Add(1)
 	go func() {
 		err = s.RunSession(program, id)
@@ -321,25 +314,18 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for {
-		if len(s.PiecesDone) == len(s.PieceHashes) {
-			return
-		}
-		if len(s.ConnectedPeers) >= MaxConnections {
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		for _, peer := range s.Peers {
-			go s.startPeerConnection(peer)
-		}
+	for _, peer := range s.Peers {
+		s.startPeerConnection(peer)
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
+
 	}
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
-	program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Peers: %d", len(s.Peers))})
+	program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Peers: %d - Downloading", len(s.Peers))})
 	// Init queues for workers to retrieve work and send results
 	s.ConnectedPeers = make(map[[20]byte]*PeerConnection)
-	s.peerMessageChan = make(chan PeerMessage)
+	s.peerMessageChan = make(chan PeerMessage, MaxConnections)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 	s.activePieces = make(chan *pieceWork, MaxActivePieces)
@@ -406,8 +392,6 @@ func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
 	if msg == nil { // keep-alive
 		return nil
 	}
-
-	s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String()})
 
 	switch msg.ID {
 	case MsgChoke:

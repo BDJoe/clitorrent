@@ -1,7 +1,6 @@
 package torrent
 
 import (
-	"crypto/rand"
 	"gotorrent/internal/util"
 	"os"
 	"path/filepath"
@@ -40,16 +39,12 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		return nil, err
 	}
 
-	var peerID [20]byte
-	_, err = rand.Read(peerID[:])
+	peerID, err := generatePeerID()
 	if err != nil {
 		return nil, err
 	}
-	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash}
-	err = GetPeers(&tracker, peerID, EventStarted)
-	if err != nil {
-		return nil, err
-	}
+
+	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash, Length: tf.Length}
 	bf := newBitfield(len(tf.PieceHashes))
 	session := Session{
 		TrackerInfo: tracker,
@@ -134,11 +129,6 @@ func InitCachedSession(session *Session) {
 	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Initializing Torrent"})
 	err := session.initFile()
 	if err != nil {
-		return
-	}
-	err = GetPeers(&session.TrackerInfo, session.PeerID, EventStarted)
-	if err != nil {
-		session.Tui.Send(util.ErrorMsg{TorrentId: session.TorrentID, Err: err.Error()})
 		return
 	}
 	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Ready"})

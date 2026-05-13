@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -11,6 +12,15 @@ import (
 type Peer struct {
 	IP   net.IP
 	Port uint16
+}
+
+func generatePeerID() ([20]byte, error) {
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
+	if err != nil {
+		return peerID, err
+	}
+	return peerID, nil
 }
 
 // unmarshalPeers parses peer IP addresses and ports from a buffer

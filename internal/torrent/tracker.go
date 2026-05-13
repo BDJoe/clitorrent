@@ -87,8 +87,8 @@ func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
 		return nil
 	}
 
-	for _, path := range t.AnnounceList {
-		newPeers, err := t.requestPeers(path[0], peerID, Port, event)
+	for _, announce := range t.AnnounceList {
+		newPeers, err := t.requestPeers(announce[0], peerID, Port, event)
 		if err != nil {
 			continue
 		}
@@ -97,7 +97,7 @@ func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
 	}
 
 	if len(peers) == 0 {
-		fmt.Errorf("Failed to connect to trackers\n")
+		return fmt.Errorf("Failed to connect to trackers\n")
 	}
 	t.Peers = peers
 	return nil
@@ -108,24 +108,26 @@ func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 	if err != nil {
 		return "", err
 	}
-	var eventStr string
-	switch event {
-	case EventStarted:
-		eventStr = "started"
-	case EventCompleted:
-		eventStr = "completed"
-	case EventStopped:
-		eventStr = "stopped"
-	}
 	params := url.Values{
 		"info_hash":  []string{string(t.InfoHash[:])},
 		"peer_id":    []string{string(peerID[:])},
 		"port":       []string{strconv.Itoa(int(port))},
-		"uploaded":   []string{"0"},
-		"downloaded": []string{"0"},
+		"uploaded":   []string{strconv.FormatUint(uint64(t.Uploaded), 10)},
+		"downloaded": []string{strconv.FormatUint(uint64(t.Downloaded), 10)},
 		"compact":    []string{"1"},
 		"left":       []string{strconv.Itoa(t.Left)},
-		"event":      []string{eventStr},
+		"numwant":    []string{"-1"},
+	}
+	switch event {
+	case EventStarted:
+		params.Add("event", "started")
+	case EventCompleted:
+		params.Add("event", "completed")
+	case EventStopped:
+		params.Add("event", "stopped")
+	case EventNone:
+	default:
+		panic("unhandled default case")
 	}
 	base.RawQuery = params.Encode()
 	return base.String(), nil
@@ -220,9 +222,11 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 
 	r := AnnounceRequest{
 		InfoHash:      t.InfoHash,
-		Left:          uint64(t.Left),
-		NumWant:       -1,
+		Uploaded:      0,
+		Downloaded:    0,
+		Left:          uint64(t.Length),
 		Port:          port,
+		NumWant:       -1,
 		connectionId:  connId,
 		transactionId: transId,
 		PeerId:        peerID,

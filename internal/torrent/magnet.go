@@ -2,7 +2,6 @@ package torrent
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
@@ -72,8 +71,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		return nil, err
 	}
 
-	var peerID [20]byte
-	_, err = rand.Read(peerID[:])
+	peerID, err := generatePeerID()
 	if err != nil {
 		return nil, err
 	}

@@ -31,7 +31,7 @@ type PeerMessage struct {
 }
 
 func (c *PeerConnection) completeHandshake(peerID [20]byte) (*Handshake, error) {
-	c.Conn.SetDeadline(time.Now().Add(3 * time.Second))
+	c.Conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	req := newHandshake(c.InfoHash, peerID)
@@ -104,7 +104,7 @@ func (c *PeerConnection) recvBitfield() error {
 // New connects with a peer, completes a handshake, and receives a handshake
 // returns an err if any of those fail
 func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerConnection, error) {
-	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
+	conn, err := net.DialTimeout("tcp", peer.String(), 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
