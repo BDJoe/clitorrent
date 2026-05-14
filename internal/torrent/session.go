@@ -120,11 +120,7 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (s *Session) startPeerConnection(peer Peer) {
-	c, err := newClient(peer, s.PeerID, s.InfoHash, &s.bitfield)
-	if err != nil {
-		s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
-		return
-	}
+	c := newClient(peer, s.InfoHash)
 	s.addConnection(c)
 }
 
@@ -192,7 +188,11 @@ func (s *Session) runConnection(conn *PeerConnection) {
 	//	conn.Conn.Close()
 	//	return
 	//}
-
+	err := conn.startHandshake(s.PeerID, &s.bitfield)
+	if err != nil {
+		s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+		return
+	}
 	for _, peer := range s.ConnectedPeers {
 		if peer.PeerID == conn.PeerID {
 			// Peer with this id is already running
@@ -225,7 +225,6 @@ func (s *Session) handleMessages(c *PeerConnection) {
 			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
 			continue
 		}
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: msg.String() + c.Conn.RemoteAddr().String()})
 		err = c.handleMessage(msg)
 		if err != nil {
 			continue
@@ -335,15 +334,13 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for {
-		for _, peer := range s.Peers {
-			if len(s.ConnectedPeers) >= MaxConnections {
-				time.Sleep(5 * time.Second)
-				continue
-			}
-			go s.startPeerConnection(peer)
-			s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
+	for _, peer := range s.Peers {
+		if len(s.ConnectedPeers) >= MaxConnections {
+			time.Sleep(5 * time.Second)
+			continue
 		}
+		s.startPeerConnection(peer)
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
 	}
 }
 

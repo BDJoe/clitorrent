@@ -87,11 +87,13 @@ func GetPeers(t *TrackerInfo, peerID [20]byte, event TrackerEvent) error {
 	}
 	peers := make([]Peer, 0)
 	for _, announce := range t.AnnounceList {
-		newPeers, err := t.requestPeers(announce[0], peerID, Port, event)
-		if err != nil {
-			continue
+		for _, path := range announce {
+			newPeers, err := t.requestPeers(path, peerID, Port, event)
+			if err != nil {
+				continue
+			}
+			peers = append(peers, newPeers...)
 		}
-		peers = append(peers, newPeers...)
 
 	}
 

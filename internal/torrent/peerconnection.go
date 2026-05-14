@@ -93,42 +93,47 @@ func (c *PeerConnection) recvBitfield() error {
 	return nil
 }
 
-// New connects with a peer, completes a handshake, and receives a handshake
-// returns an err if any of those fail
-func newClient(peer Peer, peerID, infoHash [20]byte, bitfield *Bitfield) (*PeerConnection, error) {
-	conn, err := net.DialTimeout("tcp", peer.String(), 3*time.Second)
-	if err != nil {
-		return nil, err
-	}
+func newClient(peer Peer, infoHash [20]byte) *PeerConnection {
 	client := PeerConnection{
-		Conn:           conn,
 		AmChoked:       true,
 		PeerChoked:     true,
 		AmInterested:   false,
 		PeerInterested: false,
 		InfoHash:       infoHash,
+		Address:        peer,
 	}
+	return &client
+}
+
+// New connects with a peer, completes a handshake, and receives a handshake
+// returns an err if any of those fail
+func (client *PeerConnection) startHandshake(peerID [20]byte, bitfield *Bitfield) error {
+	conn, err := net.DialTimeout("tcp", client.Address.String(), 15*time.Second)
+	if err != nil {
+		return err
+	}
+
 	res, err := client.completeHandshake(peerID)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return err
 	}
 	client.PeerID = res.PeerID
 
 	err = client.recvBitfield()
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return err
 	}
 
 	if len(*bitfield) != bytes.Count(*bitfield, []byte{0}) {
 		err = client.SendBitfield(bitfield)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return &client, nil
+	return nil
 }
 
 // New connects with a peer, completes a handshake, and receives a handshake
