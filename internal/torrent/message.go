@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"time"
 )
 
 type messageID uint8
@@ -135,7 +134,7 @@ func sendMessage(c *PeerConnection, msg []byte) error {
 }
 
 // readMessage parses a message from a stream. Returns 'nil' on keep-alive message
-func readMessage(c *PeerConnection, timeout time.Duration) (*Message, error) {
+func readMessage(c *PeerConnection) (*Message, error) {
 	lengthBuf := make([]byte, 4)
 	_, err := io.ReadFull(c.Conn, lengthBuf)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"gotorrent/internal/util"
+	"io"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -29,7 +30,7 @@ const MaxActivePieces = 10
 // Session holds data required to download a torrent from a list of peers
 type Session struct {
 	TrackerInfo
-	ConnectedPeers    map[[20]byte]*PeerConnection
+	ConnectedPeers
 	Seeders           uint32
 	Leechers          uint32
 	PeerID            [20]byte
@@ -50,6 +51,11 @@ type Session struct {
 	bitfield          Bitfield
 	peerMessageChan   chan PeerMessage
 	addConnectionChan chan *PeerConnection
+}
+
+type ConnectedPeers struct {
+	peers map[[20]byte]*PeerConnection
+	mx    sync.Mutex
 }
 
 type pieceWork struct {
@@ -120,8 +126,38 @@ func checkIntegrity(pw *pieceWork, buf []byte) error {
 }
 
 func (s *Session) startPeerConnection(peer Peer) {
-	c := newClient(peer, s.InfoHash)
-	s.addConnection(c)
+	conn, err := newClient(peer, s.InfoHash, s.PeerID, &s.bitfield)
+	if err != nil {
+		if err.Error() != io.EOF.Error() {
+			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+		}
+
+		return
+	}
+	if conn.PeerID == s.PeerID {
+		conn.Conn.Close()
+		return
+	}
+
+	for _, peer := range s.ConnectedPeers.peers {
+		if peer.PeerID == conn.PeerID {
+			// Peer with this id is already running
+			conn.Conn.Close()
+			return
+		}
+	}
+
+	if len(s.ConnectedPeers.peers) >= MaxConnections {
+		// already have enough peer connections
+		conn.Conn.Close()
+		return
+	}
+
+	if !s.setInterested(conn) {
+		conn.Conn.Close()
+		return
+	}
+	s.runConnection(conn)
 }
 
 func (s *Session) addConnection(conn *PeerConnection) {
@@ -174,46 +210,21 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 }
 
 func (s *Session) removePeer(conn *PeerConnection) {
-	_, ok := s.ConnectedPeers[conn.PeerID]
+	_, ok := s.ConnectedPeers.peers[conn.PeerID]
 	if !ok {
 		conn.Conn.Close()
 		return
 	}
 	conn.Conn.Close()
-	delete(s.ConnectedPeers, conn.PeerID)
+	s.ConnectedPeers.mx.Lock()
+	delete(s.ConnectedPeers.peers, conn.PeerID)
+	s.ConnectedPeers.mx.Unlock()
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
-	//if conn.PeerID == s.PeerID {
-	//	conn.Conn.Close()
-	//	return
-	//}
-	err := conn.startHandshake(s.PeerID, &s.bitfield)
-	if err != nil {
-		s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
-		return
-	}
-	for _, peer := range s.ConnectedPeers {
-		if peer.PeerID == conn.PeerID {
-			// Peer with this id is already running
-			conn.Conn.Close()
-			return
-		}
-	}
-
-	if len(s.ConnectedPeers) >= MaxConnections {
-		// already have enough peer connections
-		conn.Conn.Close()
-		return
-	}
-
-	if !s.setInterested(conn) {
-		conn.Conn.Close()
-		return
-	}
-
-	s.ConnectedPeers[conn.PeerID] = conn
-
+	s.ConnectedPeers.mx.Lock()
+	s.ConnectedPeers.peers[conn.PeerID] = conn
+	s.ConnectedPeers.mx.Unlock()
 	go s.handleMessages(conn)
 	go s.handleDownload(conn)
 }
@@ -222,7 +233,9 @@ func (s *Session) handleMessages(c *PeerConnection) {
 	for {
 		msg, err := c.Read()
 		if err != nil {
-			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+			if err.Error() != io.EOF.Error() {
+				s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+			}
 			continue
 		}
 		err = c.handleMessage(msg)
@@ -299,7 +312,7 @@ func (s *Session) calculatePieceSize(index int) int {
 }
 
 func (s *Session) sendHaveToClients(pieceIndex int) {
-	for _, client := range s.ConnectedPeers {
+	for _, client := range s.ConnectedPeers.peers {
 		client.SendHave(pieceIndex)
 	}
 }
@@ -334,21 +347,26 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for _, peer := range s.Peers {
-		if len(s.ConnectedPeers) >= MaxConnections {
-			time.Sleep(5 * time.Second)
-			continue
+	for {
+		if len(s.Peers) == len(s.ConnectedPeers.peers) || len(s.PiecesDone) == len(s.PieceHashes) {
+			return
 		}
-		s.startPeerConnection(peer)
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers), len(s.Peers))})
+		for _, peer := range s.Peers {
+			if len(s.ConnectedPeers.peers) >= MaxConnections {
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			s.startPeerConnection(peer)
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
 	program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Peers: %d - Downloading", len(s.Peers))})
 	// Init queues for workers to retrieve work and send results
-	s.ConnectedPeers = make(map[[20]byte]*PeerConnection)
-	s.peerMessageChan = make(chan PeerMessage, MaxConnections)
+	s.ConnectedPeers.peers = make(map[[20]byte]*PeerConnection)
+	s.peerMessageChan = make(chan PeerMessage)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 	s.activePieces = make(chan *pieceWork, MaxActivePieces)
@@ -361,6 +379,7 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 
 outer:
 	for {
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers.peers), len(s.Peers))})
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)

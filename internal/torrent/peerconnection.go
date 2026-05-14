@@ -76,7 +76,7 @@ func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handsha
 
 func (c *PeerConnection) recvBitfield() error {
 
-	msg, err := readMessage(c, 5*time.Second)
+	msg, err := readMessage(c)
 	if err != nil {
 		return err
 	}
@@ -93,8 +93,16 @@ func (c *PeerConnection) recvBitfield() error {
 	return nil
 }
 
-func newClient(peer Peer, infoHash [20]byte) *PeerConnection {
+// New connects with a peer, completes a handshake, and receives a handshake
+// returns an err if any of those fail
+func newClient(peer Peer, infoHash [20]byte, peerID [20]byte, bitfield *Bitfield) (*PeerConnection, error) {
+	conn, err := net.DialTimeout("tcp", peer.String(), 1*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
 	client := PeerConnection{
+		Conn:           conn,
 		AmChoked:       true,
 		PeerChoked:     true,
 		AmInterested:   false,
@@ -102,38 +110,28 @@ func newClient(peer Peer, infoHash [20]byte) *PeerConnection {
 		InfoHash:       infoHash,
 		Address:        peer,
 	}
-	return &client
-}
-
-// New connects with a peer, completes a handshake, and receives a handshake
-// returns an err if any of those fail
-func (client *PeerConnection) startHandshake(peerID [20]byte, bitfield *Bitfield) error {
-	conn, err := net.DialTimeout("tcp", client.Address.String(), 15*time.Second)
-	if err != nil {
-		return err
-	}
 
 	res, err := client.completeHandshake(peerID)
 	if err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 	client.PeerID = res.PeerID
 
 	err = client.recvBitfield()
 	if err != nil {
 		conn.Close()
-		return err
+		return nil, err
 	}
 
 	if len(*bitfield) != bytes.Count(*bitfield, []byte{0}) {
 		err = client.SendBitfield(bitfield)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	return &client, nil
 }
 
 // New connects with a peer, completes a handshake, and receives a handshake
@@ -166,7 +164,7 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, err
 
 // Read reads and consumes a message from the connection
 func (c *PeerConnection) Read() (*Message, error) {
-	msg, err := readMessage(c, 3*time.Second)
+	msg, err := readMessage(c)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +174,7 @@ func (c *PeerConnection) Read() (*Message, error) {
 // ReadMessages reads and consumes a message from the connection
 func (c *PeerConnection) ReadMessages() error {
 	for {
-		msg, err := readMessage(c, 1*time.Second)
+		msg, err := readMessage(c)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
 				return nil

@@ -59,10 +59,10 @@ type AnnounceResponse struct {
 type TrackerEvent uint32
 
 const (
-	EventNone TrackerEvent = iota
-	EventCompleted
-	EventStarted
-	EventStopped
+	EventNone      TrackerEvent = 0
+	EventCompleted TrackerEvent = 1
+	EventStarted   TrackerEvent = 2
+	EventStopped   TrackerEvent = 3
 )
 
 // Port to listen on
@@ -118,18 +118,9 @@ func (t *TrackerInfo) buildTrackerURL(announce string, peerID [20]byte, port uin
 		"compact":    []string{"1"},
 		"left":       []string{strconv.Itoa(t.Left)},
 		"numwant":    []string{"-1"},
+		"event":      []string{strconv.Itoa(int(event))},
 	}
-	switch event {
-	case EventStarted:
-		params.Add("event", "started")
-	case EventCompleted:
-		params.Add("event", "completed")
-	case EventStopped:
-		params.Add("event", "stopped")
-	case EventNone:
-	default:
-		panic("unhandled default case")
-	}
+
 	base.RawQuery = params.Encode()
 	return base.String(), nil
 }
@@ -139,7 +130,7 @@ func (t *TrackerInfo) requestPeers(announce string, peerID [20]byte, port uint16
 	if err != nil {
 		return nil, err
 	}
-	var peers []Peer
+	peers := make([]Peer, 0)
 
 	switch path.Scheme {
 	case "http":
@@ -242,7 +233,7 @@ func (t *TrackerInfo) requestPeersUDP(announce string, peerID [20]byte, port uin
 
 	_, err = conn.Write(a[:])
 
-	conn.SetDeadline(time.Now().Add(time.Second * 5))
+	conn.SetDeadline(time.Now().Add(time.Second * 10))
 
 	newBuf := make([]byte, 1024)
 	n, err = bufio.NewReader(conn).Read(newBuf)
