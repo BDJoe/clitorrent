@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"gotorrent/internal/util"
-	"log"
 	"net/url"
 	"strings"
 
@@ -78,36 +77,30 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		return nil, err
 	}
 	track := TrackerInfo{Announce: "", AnnounceList: mag.Trackers, InfoHash: mag.InfoHash}
-	err = GetPeers(&track, peerID, EventStarted)
-	if err != nil {
-		return nil, err
-	}
-
-	t, err := GetMetadata(track.Peers, peerID, mag.InfoHash)
-	if err != nil {
-		return nil, err
-	}
+	//err = GetPeers(&track, peerID, EventStarted)
+	//if err != nil {
+	//	return nil, err
+	//}
+	//
+	//t, err := GetMetadata(track.Peers, peerID, mag.InfoHash)
+	//if err != nil {
+	//	return nil, err
+	//}
 	session := Session{
 		TrackerInfo: track,
 		PeerID:      peerID,
 		closeChan:   make(chan struct{}),
-		PieceHashes: t.PieceHashes,
-		PieceLength: t.PieceLength,
-		Length:      t.Length,
-		Name:        t.Name,
-		Files:       t.Files,
-		Path:        downloadPath,
-		Tui:         program,
-		TorrentID:   id,
+		//PieceHashes: t.PieceHashes,
+		//PieceLength: t.PieceLength,
+		//Length:      t.Length,
+		Name: mag.Name,
+		//Files:       t.Files,
+		Path:      downloadPath,
+		Tui:       program,
+		TorrentID: id,
+		isMagnet:  true,
 	}
-	err = session.initFile()
-	if err != nil {
-		return nil, err
-	}
-	err = session.createCache()
-	if err != nil {
-		return nil, err
-	}
+
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return &session, nil
 }
@@ -129,41 +122,59 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 		return nil
 	}
 	defer c.Conn.Close()
+	//for {
+	//	if c.AmChoked {
+	//		err := c.SendInterested()
+	//		if err != nil {
+	//			log.Printf("%s\n", err)
+	//		}
+	//
+	//		err = c.SendUnchoke()
+	//		if err != nil {
+	//			log.Printf("%s\n", err)
+	//		}
+	//
+	//		err = c.ReadMessages()
+	//		if err != nil {
+	//			break
+	//		}
+	//		continue
+	//	}
+	//	break
+	//}
+
+	go c.readAndHandleExtension()
 	for {
-		if c.AmChoked {
-			err := c.SendInterested()
-			if err != nil {
-				log.Printf("%s\n", err)
-			}
-
-			err = c.SendUnchoke()
-			if err != nil {
-				log.Printf("%s\n", err)
-			}
-
-			err = c.ReadMessages()
-			if err != nil {
-				break
-			}
-			continue
+		if c.Metadata.NumPieces == c.Metadata.PiecesReceived {
+			break
 		}
-		break
 	}
 
-	metadata, err := c.getMetadata()
-	if err != nil {
-		return nil
-	}
-
-	metadataHash := sha1.Sum(metadata)
+	metadataHash := sha1.Sum(c.Metadata.Metadata)
 
 	if !bytes.Equal(metadataHash[:], infoHash[:]) {
 		return nil
 	}
 
-	info, err := ParseTorrentMagnet(metadata)
+	info, err := ParseTorrentMagnet(c.Metadata.Metadata)
 	if err != nil {
 		return nil
 	}
 	return &info
+}
+
+func (c *PeerConnection) readAndHandleExtension() {
+	for {
+		if c == nil || c.Conn == nil {
+			return
+		}
+		msg, err := c.Read()
+		if err != nil {
+			break
+		}
+		err = c.handleMessage(msg)
+		if err != nil {
+			break
+		}
+	}
 }

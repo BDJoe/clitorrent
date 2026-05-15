@@ -48,11 +48,6 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 
 	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash, Length: tf.Length}
 
-	err = GetPeers(&tracker, peerID, EventStarted)
-	if err != nil {
-		return nil, err
-	}
-
 	bf := newBitfield(len(tf.PieceHashes))
 	session := Session{
 		TrackerInfo: tracker,
@@ -67,6 +62,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		TorrentID:   id,
 		bitfield:    bf,
 		closeChan:   make(chan struct{}),
+		isMagnet:    false,
 	}
 
 	err = session.initFile()
@@ -135,12 +131,7 @@ func GetCachedTorrents() ([]*Session, error) {
 
 func InitCachedSession(session *Session) {
 	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Initializing Torrent"})
-	err := GetPeers(&session.TrackerInfo, session.PeerID, EventStarted)
-	if err != nil {
-		session.Tui.Send(util.ErrorMsg{TorrentId: session.TorrentID, Err: err.Error()})
-		return
-	}
-	err = session.initFile()
+	err := session.initFile()
 	if err != nil {
 		return
 	}

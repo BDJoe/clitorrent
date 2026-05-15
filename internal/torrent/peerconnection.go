@@ -30,48 +30,49 @@ type PeerMessage struct {
 	message *Message
 }
 
-func (c *PeerConnection) completeHandshake(peerID [20]byte) (*Handshake, error) {
+func (c *PeerConnection) completeHandshake(peerID [20]byte) error {
 
 	req := newHandshake(c.InfoHash, peerID)
 	_, err := c.Conn.Write(req.Serialize())
 	if err != nil {
-		return nil, fmt.Errorf("Failed to write handshake: %v", err)
+		return fmt.Errorf("Failed to write handshake: %v", err)
 	}
 	res, err := readHandshake(c.Conn)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read handshake: %v", err)
+		return fmt.Errorf("Failed to read handshake: %v", err)
 	}
 	if !bytes.Equal(res.InfoHash[:], c.InfoHash[:]) {
-		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
+		return fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
 	}
-
-	return res, nil
+	c.PeerID = res.PeerID
+	return nil
 }
 
-func completeMagnetHandshake(conn net.Conn, infohash, peerID [20]byte) (*Handshake, error) {
-	req := newHandshake(infohash, peerID)
-	_, err := conn.Write(req.SerializeMagnetHandshake())
+func (c *PeerConnection) completeMagnetHandshake(peerID [20]byte) error {
+	req := newHandshake(c.InfoHash, peerID)
+	_, err := c.Conn.Write(req.SerializeMagnetHandshake())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	res, err := readHandshake(conn)
+	res, err := readHandshake(c.Conn)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if !bytes.Equal(res.InfoHash[:], infohash[:]) {
-		return nil, fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, infohash)
+	if !bytes.Equal(res.InfoHash[:], c.InfoHash[:]) {
+		return fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
 	}
 
 	if res.HasExtensions {
 		m := serializeExtensionHandshake()
-		_, err := conn.Write(m)
+		_, err := c.Conn.Write(m)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
+	c.PeerID = res.PeerID
 
-	return res, nil
+	return nil
 }
 
 func (c *PeerConnection) recvBitfield() error {
@@ -111,18 +112,17 @@ func newClient(peer Peer, infoHash [20]byte, peerID [20]byte, bitfield *Bitfield
 		Address:        peer,
 	}
 
-	res, err := client.completeHandshake(peerID)
+	err = client.completeHandshake(peerID)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	client.PeerID = res.PeerID
 
-	err = client.recvBitfield()
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
+	//err = client.recvBitfield()
+	//if err != nil {
+	//	conn.Close()
+	//	return nil, err
+	//}
 
 	if len(*bitfield) != bytes.Count(*bitfield, []byte{0}) {
 		err = client.SendBitfield(bitfield)
@@ -142,22 +142,25 @@ func newMagnetClient(peer Peer, peerID, infoHash [20]byte) (*PeerConnection, err
 		return nil, err
 	}
 	client := PeerConnection{
-		Conn:     conn,
-		AmChoked: true,
-		InfoHash: infoHash,
+		Conn:           conn,
+		AmChoked:       true,
+		PeerChoked:     true,
+		AmInterested:   false,
+		PeerInterested: false,
+		InfoHash:       infoHash,
+		Address:        peer,
 	}
-	res, err := completeMagnetHandshake(client.Conn, infoHash, peerID)
+	err = client.completeMagnetHandshake(peerID)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	client.PeerID = res.PeerID
 
-	err = client.recvBitfield()
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
+	//err = client.recvBitfield()
+	//if err != nil {
+	//	conn.Close()
+	//	return nil, err
+	//}
 
 	return &client, nil
 }
@@ -214,6 +217,7 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 		c.PeerBitfield.SetPiece(index)
 	case MsgBitfield:
 		c.PeerBitfield = msg.Payload
+		c.SendInterested()
 	case MsgRequest:
 		fmt.Println(msg.String())
 		err := c.HandleRequest(msg)

@@ -218,6 +218,7 @@ func parseCacheFile(data []byte) (*Session, error) {
 		Files:       files,
 		Path:        cacheFile.Path,
 		PiecesDone:  cacheFile.PiecesDone,
+		isMagnet:    false,
 	}
 	return &session, nil
 }
