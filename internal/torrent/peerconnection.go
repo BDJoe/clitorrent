@@ -238,7 +238,7 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 
 func (c *PeerConnection) peerListener(msgChan chan PeerMessage) {
 	for {
-		if c == nil {
+		if c == nil || c.Conn == nil {
 			return
 		}
 		msg, err := c.Read()

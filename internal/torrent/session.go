@@ -129,7 +129,7 @@ func (s *Session) startPeerConnection(peer Peer) {
 	conn, err := newClient(peer, s.InfoHash, s.PeerID, &s.bitfield)
 	if err != nil {
 		if err.Error() != io.EOF.Error() {
-			s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+			//s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
 		}
 
 		return
@@ -184,7 +184,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 		case piece := <-s.activePieces:
 			if !conn.PeerBitfield.HasPiece(piece.index) {
 				s.workQueue <- piece // Put piece back on the queue
-				continue
+				break
 			}
 			// Download the piece
 			buf, err := attemptDownloadPiece(conn, piece)
@@ -203,22 +203,19 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			s.bitfield.SetPiece(piece.index)
 			s.results <- &pieceResult{piece.index, buf}
 		default:
-			time.Sleep(1 * time.Second)
-			continue
 		}
 	}
 }
 
 func (s *Session) removePeer(conn *PeerConnection) {
-	_, ok := s.ConnectedPeers.peers[conn.PeerID]
-	if !ok {
+	if conn.Conn != nil {
 		conn.Conn.Close()
-		return
 	}
-	conn.Conn.Close()
-	s.ConnectedPeers.mx.Lock()
-	delete(s.ConnectedPeers.peers, conn.PeerID)
-	s.ConnectedPeers.mx.Unlock()
+	if _, ok := s.ConnectedPeers.peers[conn.PeerID]; ok {
+		s.ConnectedPeers.mx.Lock()
+		delete(s.ConnectedPeers.peers, conn.PeerID)
+		s.ConnectedPeers.mx.Unlock()
+	}
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
@@ -233,9 +230,9 @@ func (s *Session) handleMessages(c *PeerConnection) {
 	for {
 		msg, err := c.Read()
 		if err != nil {
-			if err.Error() != io.EOF.Error() {
-				s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
-			}
+			//if err.Error() != io.EOF.Error() {
+			//	s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+			//}
 			continue
 		}
 		err = c.handleMessage(msg)
@@ -381,10 +378,12 @@ outer:
 	for {
 		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers.peers), len(s.Peers))})
 		select {
-		case conn := <-s.addConnectionChan:
-			s.runConnection(conn)
 
 		case piece := <-s.workQueue:
+			if len(s.activePieces) >= MaxActivePieces {
+				s.workQueue <- piece
+				continue
+			}
 			s.activePieces <- piece
 
 		case msg := <-s.peerMessageChan:
