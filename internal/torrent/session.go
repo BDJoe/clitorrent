@@ -211,11 +211,11 @@ func (s *Session) removePeer(conn *PeerConnection) {
 	if conn.Conn != nil {
 		conn.Conn.Close()
 	}
+	s.ConnectedPeers.mx.Lock()
 	if _, ok := s.ConnectedPeers.peers[conn.PeerID]; ok {
-		s.ConnectedPeers.mx.Lock()
 		delete(s.ConnectedPeers.peers, conn.PeerID)
-		s.ConnectedPeers.mx.Unlock()
 	}
+	s.ConnectedPeers.mx.Unlock()
 }
 
 func (s *Session) runConnection(conn *PeerConnection) {
