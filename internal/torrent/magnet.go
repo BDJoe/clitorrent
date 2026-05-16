@@ -95,10 +95,11 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 		//Length:      t.Length,
 		Name: mag.Name,
 		//Files:       t.Files,
-		Path:      downloadPath,
-		Tui:       program,
-		TorrentID: id,
-		isMagnet:  true,
+		Path:         downloadPath,
+		Tui:          program,
+		TorrentID:    id,
+		isMagnet:     true,
+		haveMetadata: false,
 	}
 
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
@@ -142,13 +143,6 @@ func GetMetadataFromPeer(peer Peer, peerId [20]byte, infoHash [20]byte) *Torrent
 	//	}
 	//	break
 	//}
-
-	go c.readAndHandleExtension()
-	for {
-		if c.Metadata.NumPieces == c.Metadata.PiecesReceived {
-			break
-		}
-	}
 
 	metadataHash := sha1.Sum(c.Metadata.Metadata)
 

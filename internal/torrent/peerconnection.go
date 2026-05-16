@@ -33,7 +33,7 @@ type PeerMessage struct {
 func (c *PeerConnection) completeHandshake(peerID [20]byte) error {
 
 	req := newHandshake(c.InfoHash, peerID)
-	_, err := c.Conn.Write(req.Serialize())
+	_, err := c.Conn.Write(req.SerializeMagnetHandshake())
 	if err != nil {
 		return fmt.Errorf("Failed to write handshake: %v", err)
 	}
@@ -43,6 +43,13 @@ func (c *PeerConnection) completeHandshake(peerID [20]byte) error {
 	}
 	if !bytes.Equal(res.InfoHash[:], c.InfoHash[:]) {
 		return fmt.Errorf("Expected infohash %x but got %x", res.InfoHash, c.InfoHash)
+	}
+	if res.HasExtensions {
+		m := serializeExtensionHandshake()
+		_, err := c.Conn.Write(m)
+		if err != nil {
+			return err
+		}
 	}
 	c.PeerID = res.PeerID
 	return nil
@@ -225,7 +232,7 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 			return err
 		}
 	case MsgExtended:
-		c.handleExtension(msg.Payload)
+		c.processExtension(msg.Payload)
 	case MsgPiece:
 		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
 		if err != nil {
@@ -236,6 +243,17 @@ func (c *PeerConnection) handleMessage(msg *Message) error {
 
 	default:
 		return fmt.Errorf("unrecognized message ID %d", msg.ID)
+	}
+	return nil
+}
+
+func (c *PeerConnection) HandleExtension(msg *Message) error {
+	if msg == nil { // keep-alive
+		return nil
+	}
+
+	if msg.ID == MsgExtended {
+		c.processExtension(msg.Payload)
 	}
 	return nil
 }

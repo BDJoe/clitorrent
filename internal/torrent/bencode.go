@@ -206,19 +206,20 @@ func parseCacheFile(data []byte) (*Session, error) {
 	tracker := TrackerInfo{Announce: cacheFile.TrackerInfo.Announce, AnnounceList: cacheFile.TrackerInfo.AnnounceList, InfoHash: cacheFile.TrackerInfo.InfoHash, Length: cacheFile.TrackerInfo.Length}
 
 	session := Session{
-		TrackerInfo: tracker,
-		closeChan:   make(chan struct{}),
-		Seeders:     cacheFile.Seeders,
-		Leechers:    cacheFile.Leechers,
-		PeerID:      cacheFile.PeerID,
-		PieceHashes: cacheFile.PieceHashes,
-		PieceLength: cacheFile.PieceLength,
-		Length:      cacheFile.Length,
-		Name:        cacheFile.Name,
-		Files:       files,
-		Path:        cacheFile.Path,
-		PiecesDone:  cacheFile.PiecesDone,
-		isMagnet:    false,
+		TrackerInfo:  tracker,
+		closeChan:    make(chan struct{}),
+		Seeders:      cacheFile.Seeders,
+		Leechers:     cacheFile.Leechers,
+		PeerID:       cacheFile.PeerID,
+		PieceHashes:  cacheFile.PieceHashes,
+		PieceLength:  cacheFile.PieceLength,
+		Length:       cacheFile.Length,
+		Name:         cacheFile.Name,
+		Files:        files,
+		Path:         cacheFile.Path,
+		PiecesDone:   cacheFile.PiecesDone,
+		isMagnet:     false,
+		haveMetadata: true,
 	}
 	return &session, nil
 }

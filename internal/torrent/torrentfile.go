@@ -50,19 +50,20 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 
 	bf := newBitfield(len(tf.PieceHashes))
 	session := Session{
-		TrackerInfo: tracker,
-		PeerID:      peerID,
-		PieceHashes: tf.PieceHashes,
-		PieceLength: tf.PieceLength,
-		Length:      tf.Length,
-		Name:        tf.Name,
-		Files:       tf.Files,
-		Path:        downloadPath,
-		Tui:         program,
-		TorrentID:   id,
-		bitfield:    bf,
-		closeChan:   make(chan struct{}),
-		isMagnet:    false,
+		TrackerInfo:  tracker,
+		PeerID:       peerID,
+		PieceHashes:  tf.PieceHashes,
+		PieceLength:  tf.PieceLength,
+		Length:       tf.Length,
+		Name:         tf.Name,
+		Files:        tf.Files,
+		Path:         downloadPath,
+		Tui:          program,
+		TorrentID:    id,
+		bitfield:     bf,
+		closeChan:    make(chan struct{}),
+		isMagnet:     false,
+		haveMetadata: true,
 	}
 
 	err = session.initFile()

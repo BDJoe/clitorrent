@@ -52,6 +52,7 @@ type Session struct {
 	peerMessageChan   chan PeerMessage
 	addConnectionChan chan *PeerConnection
 	isMagnet          bool
+	haveMetadata      bool
 }
 
 type ConnectedPeers struct {
@@ -151,6 +152,39 @@ func (s *Session) addConnection(conn *PeerConnection) {
 
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
+		if !s.haveMetadata && s.isMagnet {
+			metadata, err := conn.getMetadata()
+			if err != nil {
+				return
+			}
+			metadataHash := sha1.Sum(metadata)
+
+			if !bytes.Equal(metadataHash[:], s.InfoHash[:]) {
+				return
+			}
+
+			info, err := ParseTorrentMagnet(metadata)
+			if err != nil {
+				return
+			}
+			s.PieceHashes = info.PieceHashes
+			s.PieceLength = info.PieceLength
+			s.Files = info.Files
+			bf := newBitfield(len(info.PieceHashes))
+			s.bitfield = bf
+			err = s.initFile()
+			if err != nil {
+				return
+			}
+			err = s.createCache()
+			if err != nil {
+				return
+			}
+			s.haveMetadata = true
+			s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
+			s.scheduleWork()
+			continue
+		}
 		if conn.AmChoked {
 			time.Sleep(1 * time.Second)
 			continue
@@ -327,25 +361,25 @@ func (s *Session) StartSession(program *tea.Program, id int) error {
 		return err
 	}
 
-	if s.isMagnet {
-		program.Send(util.StatusMsg{TorrentId: id, Status: "Getting Metadata"})
-		m, err := GetMetadata(s.TrackerInfo.Peers, s.PeerID, s.InfoHash)
-		if err != nil {
-			return err
-		}
-		s.PieceHashes = m.PieceHashes
-		s.PieceLength = m.PieceLength
-		s.Length = m.Length
-		s.Files = m.Files
-		err = s.initFile()
-		if err != nil {
-			return err
-		}
-		err = s.createCache()
-		if err != nil {
-			return err
-		}
-	}
+	//if s.isMagnet {
+	//	program.Send(util.StatusMsg{TorrentId: id, Status: "Getting Metadata"})
+	//	m, err := GetMetadata(s.TrackerInfo.Peers, s.PeerID, s.InfoHash)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	s.PieceHashes = m.PieceHashes
+	//	s.PieceLength = m.PieceLength
+	//	s.Length = m.Length
+	//	s.Files = m.Files
+	//	err = s.initFile()
+	//	if err != nil {
+	//		return err
+	//	}
+	//	err = s.createCache()
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -378,23 +412,30 @@ func (s *Session) connectToPeers() {
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
-	program.Send(util.StatusMsg{TorrentId: id, Status: fmt.Sprintf("Peers: %d - Downloading", len(s.Peers))})
 	// Init queues for workers to retrieve work and send results
 	s.ConnectedPeers.peers = make(map[string]*PeerConnection)
 	s.peerMessageChan = make(chan PeerMessage)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
-	s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 	s.activePieces = make(chan *pieceWork, MaxActivePieces)
 	s.results = make(chan *pieceResult)
 	s.PiecesNeeded = make([]*pieceWork, 0)
-	s.scheduleWork()
+	if !s.isMagnet {
+		s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
+		s.scheduleWork()
+	}
 
 	s.connectToPeers()
 	//seeding := false
 
 outer:
 	for {
-		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - Downloading", len(s.ConnectedPeers.peers), len(s.Peers))})
+		var status string
+		if s.haveMetadata {
+			status = "Downloading"
+		} else {
+			status = "Getting metadata"
+		}
+		s.Tui.Send(util.StatusMsg{TorrentId: s.TorrentID, Status: fmt.Sprintf("Peers: %d(%d) - %s", len(s.ConnectedPeers.peers), len(s.Peers), status)})
 		select {
 		case conn := <-s.addConnectionChan:
 			s.runConnection(conn)
@@ -407,7 +448,12 @@ outer:
 			s.activePieces <- piece
 
 		case msg := <-s.peerMessageChan:
-			err := msg.peer.handleMessage(msg.message)
+			var err error
+			if s.isMagnet && !s.haveMetadata {
+				err = msg.peer.HandleExtension(msg.message)
+			} else {
+				err = msg.peer.handleMessage(msg.message)
+			}
 			if err != nil {
 				break
 			}
@@ -481,7 +527,7 @@ func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
 			return err
 		}
 	case MsgExtended:
-		c.handleExtension(msg.Payload)
+		c.processExtension(msg.Payload)
 	case MsgPiece:
 		n, err := parsePiece(c.PieceState.index, c.PieceState.buf, msg)
 		if err != nil {
