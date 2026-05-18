@@ -152,7 +152,7 @@ func (s *Session) addConnection(conn *PeerConnection) {
 
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
-		if !s.haveMetadata && s.isMagnet {
+		if !s.haveMetadata {
 			metadata, err := conn.getMetadata()
 			if err != nil {
 				return
@@ -170,6 +170,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			s.PieceHashes = info.PieceHashes
 			s.PieceLength = info.PieceLength
 			s.Files = info.Files
+			s.Length = info.Length
 			bf := newBitfield(len(info.PieceHashes))
 			s.bitfield = bf
 			err = s.initFile()
@@ -183,6 +184,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			s.haveMetadata = true
 			s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 			s.scheduleWork()
+			time.Sleep(1 * time.Second)
 			continue
 		}
 		if conn.AmChoked {
@@ -402,6 +404,7 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
+	s.ConnectedPeers.mx.Lock()
 	for _, peer := range s.Peers {
 		if len(s.ConnectedPeers.peers) < MaxConnections {
 			if _, ok := s.ConnectedPeers.peers[peer.String()]; !ok {
@@ -409,6 +412,7 @@ func (s *Session) connectToPeers() {
 			}
 		}
 	}
+	s.ConnectedPeers.mx.Unlock()
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
@@ -419,7 +423,7 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 	s.activePieces = make(chan *pieceWork, MaxActivePieces)
 	s.results = make(chan *pieceResult)
 	s.PiecesNeeded = make([]*pieceWork, 0)
-	if !s.isMagnet {
+	if s.haveMetadata {
 		s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
 		s.scheduleWork()
 	}
@@ -429,6 +433,13 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 
 outer:
 	for {
+		if len(s.PiecesDone) == len(s.PieceHashes) {
+			break outer
+		}
+		if len(s.ConnectedPeers.peers) < MaxConnections &&
+			len(s.ConnectedPeers.peers) < len(s.Peers) {
+			s.connectToPeers()
+		}
 		var status string
 		if s.haveMetadata {
 			status = "Downloading"
@@ -449,10 +460,10 @@ outer:
 
 		case msg := <-s.peerMessageChan:
 			var err error
-			if s.isMagnet && !s.haveMetadata {
+			if !s.haveMetadata {
 				err = msg.peer.HandleExtension(msg.message)
 			} else {
-				err = msg.peer.handleMessage(msg.message)
+				err = s.handleMessage(msg.message, msg.peer)
 			}
 			if err != nil {
 				break
@@ -519,6 +530,9 @@ func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
 		c.PeerBitfield.SetPiece(index)
 	case MsgBitfield:
 		c.PeerBitfield = msg.Payload
+		if !s.setInterested(c) {
+			s.removePeer(c)
+		}
 
 	case MsgRequest:
 		fmt.Println(msg.String())

@@ -11,13 +11,13 @@ import (
 func TestOpenMagnet(t *testing.T) {
 	prog := tea.Program{}
 	session, err := OpenMagnet(MagnetLink, "/home/joe/Downloads/", &prog, 0)
+	session.StartSession(&prog, 0)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 }
 
 func TestGetCachedTorrents(t *testing.T) {
-	prog := tea.Program{}
-	sessions, err := GetCachedTorrents(&prog)
+	sessions, err := GetCachedTorrents()
 	fmt.Printf("%+v\n", sessions[0])
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
