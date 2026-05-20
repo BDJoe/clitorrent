@@ -153,6 +153,10 @@ func (s *Session) addConnection(conn *PeerConnection) {
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
 		if !s.haveMetadata {
+			if conn.SupportedExtensions == nil {
+				time.Sleep(1 * time.Second)
+				continue
+			}
 			metadata, err := conn.getMetadata()
 			if err != nil {
 				return
@@ -195,6 +199,10 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			s.removePeer(conn)
 			return
 		}
+		if !s.setInterested(conn) {
+			s.removePeer(conn)
+			return
+		}
 		select {
 		case <-s.closeChan:
 			s.removePeer(conn)
@@ -202,7 +210,7 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 		case piece := <-s.activePieces:
 			if !conn.PeerBitfield.HasPiece(piece.index) {
 				s.workQueue <- piece // Put piece back on the queue
-				break
+				continue
 			}
 			// Download the piece
 			buf, err := attemptDownloadPiece(conn, piece)
@@ -433,9 +441,9 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 
 outer:
 	for {
-		if len(s.PiecesDone) == len(s.PieceHashes) {
-			break outer
-		}
+		//if len(s.PiecesDone) == len(s.PieceHashes) {
+		//	break outer
+		//}
 		if len(s.ConnectedPeers.peers) < MaxConnections &&
 			len(s.ConnectedPeers.peers) < len(s.Peers) {
 			s.connectToPeers()

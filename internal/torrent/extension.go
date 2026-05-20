@@ -80,7 +80,7 @@ func (c *PeerConnection) getMetadata() ([]byte, error) {
 					//fmt.Printf("error sending metadata message: %s\n", err)
 					return nil, err
 				}
-
+				c.PiecesRequested++
 			}
 		}
 	}
