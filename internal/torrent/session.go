@@ -7,7 +7,6 @@ import (
 	"gotorrent/internal/util"
 	"io"
 	"math"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -89,14 +88,14 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 
 	// Setting a deadline helps get unresponsive peers unstuck.
 	// 30 seconds is more than enough time to download a 262 KB piece
-	//c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-	//defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
+	c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
+	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for state.downloaded < pw.length {
-		//if c.AmChoked {
-		//	c.SendInterested()
-		//	continue
-		//}
+		if c.AmChoked {
+			c.SendInterested()
+			continue
+		}
 		// If unchoked, send requests until we have enough unfulfilled requests
 		if !c.AmChoked {
 			for state.backlog < MaxBackLog && state.requested < pw.length {
@@ -191,17 +190,13 @@ func (s *Session) handleDownload(conn *PeerConnection) {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		if conn.AmChoked {
-			time.Sleep(1 * time.Second)
-			continue
-		}
 		if len(s.PiecesDone) == len(s.PieceHashes) {
 			s.removePeer(conn)
 			return
 		}
-		if !s.setInterested(conn) {
-			s.removePeer(conn)
-			return
+		if conn.AmChoked {
+			time.Sleep(1 * time.Second)
+			continue
 		}
 		select {
 		case <-s.closeChan:
@@ -444,10 +439,10 @@ outer:
 		//if len(s.PiecesDone) == len(s.PieceHashes) {
 		//	break outer
 		//}
-		if len(s.ConnectedPeers.peers) < MaxConnections &&
-			len(s.ConnectedPeers.peers) < len(s.Peers) {
-			s.connectToPeers()
-		}
+		//if len(s.ConnectedPeers.peers) < MaxConnections &&
+		//	len(s.ConnectedPeers.peers) < len(s.Peers) {
+		//	s.connectToPeers()
+		//}
 		var status string
 		if s.haveMetadata {
 			status = "Downloading"
@@ -583,9 +578,9 @@ func (s *Session) scheduleWork() {
 			s.bitfield.SetPiece(index)
 		}
 	}
-	rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
-		s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
-	})
+	//rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
+	//	s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
+	//})
 	for _, piece := range s.PiecesNeeded {
 		s.workQueue <- piece
 	}
@@ -629,11 +624,11 @@ func (s *Session) initFile() error {
 		}
 	}
 	if buf != nil {
-		s.TrackerInfo.Left = s.Length - len(buf)
 		err = s.getCache(buf)
 		if err != nil {
 			return err
 		}
+		s.TrackerInfo.Left = s.Length - len(buf)
 	}
 	return nil
 }
