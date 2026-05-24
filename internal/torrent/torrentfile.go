@@ -1,7 +1,6 @@
 package torrent
 
 import (
-	"crypto/rand"
 	"gotorrent/internal/util"
 	"os"
 	"path/filepath"
@@ -29,44 +28,38 @@ type TorrentFile struct {
 // OpenTorrent parses a torrent file
 func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id int) (*Session, error) {
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Initializing Torrent"})
-	file, err := os.Open(filePath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	var session *Session
+	if strings.HasPrefix(filePath, "magnet:") {
+		tf, err := ParseMagnetLink(filePath)
+		if err != nil {
+			return nil, err
+		}
+		session, err = newSessionFromMagnet(tf)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
 
-	tf, err := ParseTorrentFile(file)
-	if err != nil {
-		return nil, err
-	}
-
-	var peerID [20]byte
-	_, err = rand.Read(peerID[:])
-	if err != nil {
-		return nil, err
-	}
-
-	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash, Length: tf.Length}
-
-	bf := newBitfield(len(tf.PieceHashes))
-	session := Session{
-		TrackerInfo:  tracker,
-		PeerID:       peerID,
-		PieceHashes:  tf.PieceHashes,
-		PieceLength:  tf.PieceLength,
-		Length:       tf.Length,
-		Name:         tf.Name,
-		Files:        tf.Files,
-		Path:         downloadPath,
-		Tui:          program,
-		TorrentID:    id,
-		bitfield:     bf,
-		closeChan:    make(chan struct{}),
-		isMagnet:     false,
-		haveMetadata: true,
+		tf, err := ParseTorrentFile(file)
+		if err != nil {
+			return nil, err
+		}
+		session, err = newSession(tf)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	err = session.initFile()
+	session.Tui = program
+	session.TorrentID = id
+	session.Path = downloadPath
+
+	err := session.initFile()
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +68,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		return nil, err
 	}
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
-	return &session, nil
+	return session, nil
 }
 
 func (s *Session) createCache() error {

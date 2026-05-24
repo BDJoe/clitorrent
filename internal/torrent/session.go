@@ -2,6 +2,7 @@ package torrent
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
 	"gotorrent/internal/util"
@@ -76,6 +77,50 @@ type pieceProgress struct {
 	downloaded int
 	requested  int
 	backlog    int
+}
+
+func newSession(tf TorrentInfo) (*Session, error) {
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
+	if err != nil {
+		return nil, err
+	}
+
+	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash, Length: tf.Length}
+
+	bf := newBitfield(len(tf.PieceHashes))
+	session := Session{
+		TrackerInfo:  tracker,
+		PeerID:       peerID,
+		PieceHashes:  tf.PieceHashes,
+		PieceLength:  tf.PieceLength,
+		Length:       tf.Length,
+		Name:         tf.Name,
+		Files:        tf.Files,
+		bitfield:     bf,
+		closeChan:    make(chan struct{}),
+		isMagnet:     false,
+		haveMetadata: true,
+	}
+	return &session, nil
+}
+
+func newSessionFromMagnet(tf TorrentInfo) (*Session, error) {
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
+	if err != nil {
+		return nil, err
+	}
+	track := TrackerInfo{Announce: "", AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash}
+	session := Session{
+		TrackerInfo:  track,
+		PeerID:       peerID,
+		closeChan:    make(chan struct{}),
+		Name:         tf.Name,
+		isMagnet:     true,
+		haveMetadata: false,
+	}
+	return &session, nil
 }
 
 func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {

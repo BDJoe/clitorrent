@@ -19,8 +19,8 @@ type Magnet struct {
 
 const MagnetLink = "magnet:?xt=urn:btih:7e0636e1b0a6e32955082b37f3db10d6a953a5a3&dn=Dungeon%20Crawler%20Carl%20-%20Book%201%20-%20Matt%20Dinniman&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.open-internet.nl%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A69691337%2Fannounce&tr=udp%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce&tr=http%3A%2F%2Ftracker.baravik.org%3A6970%2Fannounce&tr=http%3A%2F%2Fretracker.telecom.by%3A80%2Fannounce&tr=http%3A%2F%2Ftracker.vanitycore.co%3A6969%2Fannounce"
 
-func ParseMagnetLink(magnet string) (Magnet, error) {
-	var mag Magnet
+func ParseMagnetLink(magnet string) (TorrentInfo, error) {
+	var mag TorrentInfo
 	link, err := url.Parse(magnet)
 	if err != nil {
 		return mag, err
@@ -56,7 +56,7 @@ func ParseMagnetLink(magnet string) (Magnet, error) {
 	}
 	if data, ok := params["tr"]; ok {
 		for _, tracker := range data {
-			mag.Trackers = append(mag.Trackers, []string{tracker})
+			mag.AnnounceList = append(mag.AnnounceList, []string{tracker})
 		}
 	}
 	return mag, nil
@@ -74,7 +74,7 @@ func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) 
 	if err != nil {
 		return nil, err
 	}
-	track := TrackerInfo{Announce: "", AnnounceList: mag.Trackers, InfoHash: mag.InfoHash}
+	track := TrackerInfo{Announce: "", AnnounceList: mag.AnnounceList, InfoHash: mag.InfoHash}
 	//err = GetPeers(&track, peerID, EventStarted)
 	//if err != nil {
 	//	return nil, err
