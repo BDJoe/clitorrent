@@ -59,14 +59,17 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 	session.TorrentID = id
 	session.Path = downloadPath
 
-	err := session.initFile()
-	if err != nil {
-		return nil, err
+	if !session.isMagnet {
+		err := session.initFile()
+		if err != nil {
+			return nil, err
+		}
+		err = session.createCache()
+		if err != nil {
+			return nil, err
+		}
 	}
-	err = session.createCache()
-	if err != nil {
-		return nil, err
-	}
+	
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return session, nil
 }

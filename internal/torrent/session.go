@@ -452,15 +452,17 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	s.ConnectedPeers.mx.Lock()
-	for _, peer := range s.Peers {
-		if len(s.ConnectedPeers.peers) < MaxConnections {
-			if _, ok := s.ConnectedPeers.peers[peer.String()]; !ok {
-				go s.startPeerConnection(peer)
+	for len(s.ConnectedPeers.peers) < MaxConnections {
+		s.ConnectedPeers.mx.Lock()
+		for _, peer := range s.Peers {
+			if len(s.ConnectedPeers.peers) < MaxConnections {
+				if _, ok := s.ConnectedPeers.peers[peer.String()]; !ok {
+					s.startPeerConnection(peer)
+				}
 			}
 		}
+		s.ConnectedPeers.mx.Unlock()
 	}
-	s.ConnectedPeers.mx.Unlock()
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
@@ -476,7 +478,7 @@ func (s *Session) RunSession(program *tea.Program, id int) error {
 		s.scheduleWork()
 	}
 
-	s.connectToPeers()
+	go s.connectToPeers()
 	//seeding := false
 
 outer:

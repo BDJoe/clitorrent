@@ -545,7 +545,7 @@ func (t *torrentModel) openFile(m model, id int) tea.Msg {
 }
 
 func (t *torrentModel) openMagnet(m model, id int) tea.Msg {
-	tf, err := session.OpenMagnet(t.FilePath, t.SavePath, m.program, id)
+	tf, err := session.OpenTorrent(t.FilePath, t.SavePath, m.program, id)
 	if err != nil {
 		return util.ErrorMsg{TorrentId: id, Err: t.Err}
 	}
