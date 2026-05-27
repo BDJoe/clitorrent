@@ -4,6 +4,7 @@
     <option name="excludedPackages">
       <array>
         <option value="golang.org/x/net/context" />
+        <option value="slices" />
       </array>
     </option>
   </component>

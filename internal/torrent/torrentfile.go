@@ -49,7 +49,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 		if err != nil {
 			return nil, err
 		}
-		session, err = newSession(tf)
+		session, err = newSessionFromFile(tf)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +69,7 @@ func OpenTorrent(filePath string, downloadPath string, program *tea.Program, id 
 			return nil, err
 		}
 	}
-	
+
 	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
 	return session, nil
 }

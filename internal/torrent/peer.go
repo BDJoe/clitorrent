@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -28,6 +29,15 @@ func unmarshalPeers(peersBin []byte) ([]Peer, error) {
 		peers[i].Port = binary.BigEndian.Uint16(peersBin[offset+4 : offset+6])
 	}
 	return peers, nil
+}
+
+func generatePeerID() ([20]byte, error) {
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
+	if err != nil {
+		return peerID, err
+	}
+	return peerID, nil
 }
 
 func (p Peer) String() string {

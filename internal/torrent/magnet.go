@@ -1,14 +1,10 @@
 package torrent
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"gotorrent/internal/util"
 	"net/url"
 	"strings"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 type Magnet struct {
@@ -62,47 +58,47 @@ func ParseMagnetLink(magnet string) (TorrentInfo, error) {
 	return mag, nil
 }
 
-func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) (*Session, error) {
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Initializing Torrent"})
-	mag, err := ParseMagnetLink(link)
-	if err != nil {
-		return nil, err
-	}
-
-	var peerID [20]byte
-	_, err = rand.Read(peerID[:])
-	if err != nil {
-		return nil, err
-	}
-	track := TrackerInfo{Announce: "", AnnounceList: mag.AnnounceList, InfoHash: mag.InfoHash}
-	//err = GetPeers(&track, peerID, EventStarted)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//
-	//t, err := GetMetadata(track.Peers, peerID, mag.InfoHash)
-	//if err != nil {
-	//	return nil, err
-	//}
-	session := Session{
-		TrackerInfo: track,
-		PeerID:      peerID,
-		closeChan:   make(chan struct{}),
-		//PieceHashes: t.PieceHashes,
-		//PieceLength: t.PieceLength,
-		//Length:      t.Length,
-		Name: mag.Name,
-		//Files:       t.Files,
-		Path:         downloadPath,
-		Tui:          program,
-		TorrentID:    id,
-		isMagnet:     true,
-		haveMetadata: false,
-	}
-
-	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
-	return &session, nil
-}
+//func OpenMagnet(link string, downloadPath string, program *tea.Program, id int) (*Session, error) {
+//	program.Send(util.StatusMsg{TorrentId: id, Status: "Initializing Torrent"})
+//	mag, err := ParseMagnetLink(link)
+//	if err != nil {
+//		return nil, err
+//	}
+//
+//	var peerID [20]byte
+//	_, err = rand.Read(peerID[:])
+//	if err != nil {
+//		return nil, err
+//	}
+//	track := TrackerInfo{Announce: "", AnnounceList: mag.AnnounceList, InfoHash: mag.InfoHash}
+//	//err = GetPeers(&track, peerID, EventStarted)
+//	//if err != nil {
+//	//	return nil, err
+//	//}
+//	//
+//	//t, err := GetMetadata(track.Peers, peerID, mag.InfoHash)
+//	//if err != nil {
+//	//	return nil, err
+//	//}
+//	session := Session{
+//		TrackerInfo: track,
+//		PeerID:      peerID,
+//		closeChan:   make(chan struct{}),
+//		//PieceHashes: t.PieceHashes,
+//		//PieceLength: t.PieceLength,
+//		//Length:      t.Length,
+//		Name: mag.Name,
+//		//Files:       t.Files,
+//		Path:         downloadPath,
+//		Tui:          program,
+//		TorrentID:    id,
+//		isMagnet:     true,
+//		haveMetadata: false,
+//	}
+//
+//	program.Send(util.StatusMsg{TorrentId: id, Status: "Ready to download"})
+//	return &session, nil
+//}
 
 //func GetMetadata(peers []Peer, peerID [20]byte, infoHash [20]byte) (*TorrentInfo, error) {
 //	for _, peer := range peers {

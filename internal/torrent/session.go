@@ -2,12 +2,12 @@ package torrent
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha1"
 	"fmt"
 	"gotorrent/internal/util"
 	"io"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,9 +79,8 @@ type pieceProgress struct {
 	backlog    int
 }
 
-func newSession(tf TorrentInfo) (*Session, error) {
-	var peerID [20]byte
-	_, err := rand.Read(peerID[:])
+func newSessionFromFile(tf TorrentInfo) (*Session, error) {
+	peerID, err := generatePeerID()
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +105,7 @@ func newSession(tf TorrentInfo) (*Session, error) {
 }
 
 func newSessionFromMagnet(tf TorrentInfo) (*Session, error) {
-	var peerID [20]byte
-	_, err := rand.Read(peerID[:])
+	peerID, err := generatePeerID()
 	if err != nil {
 		return nil, err
 	}
@@ -194,46 +192,54 @@ func (s *Session) addConnection(conn *PeerConnection) {
 	}
 }
 
+func (s *Session) getMetadata(conn *PeerConnection) {
+	for {
+		if conn.SupportedExtensions == nil {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		metadata, err := conn.getMetadata()
+		if err != nil {
+			return
+		}
+		metadataHash := sha1.Sum(metadata)
+
+		if !bytes.Equal(metadataHash[:], s.InfoHash[:]) {
+			return
+		}
+
+		info, err := ParseTorrentMagnet(metadata)
+		if err != nil {
+			return
+		}
+		if s.haveMetadata {
+			return
+		}
+		s.PieceHashes = info.PieceHashes
+		s.PieceLength = info.PieceLength
+		s.Files = info.Files
+		s.Length = info.Length
+		bf := newBitfield(len(info.PieceHashes))
+		s.bitfield = bf
+		err = s.initFile()
+		if err != nil {
+			return
+		}
+		err = s.createCache()
+		if err != nil {
+			return
+		}
+		s.haveMetadata = true
+		s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
+		s.scheduleWork()
+		return
+	}
+}
+
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
 		if !s.haveMetadata {
-			if conn.SupportedExtensions == nil {
-				time.Sleep(1 * time.Second)
-				continue
-			}
-			metadata, err := conn.getMetadata()
-			if err != nil {
-				return
-			}
-			metadataHash := sha1.Sum(metadata)
-
-			if !bytes.Equal(metadataHash[:], s.InfoHash[:]) {
-				return
-			}
-
-			info, err := ParseTorrentMagnet(metadata)
-			if err != nil {
-				return
-			}
-			s.PieceHashes = info.PieceHashes
-			s.PieceLength = info.PieceLength
-			s.Files = info.Files
-			s.Length = info.Length
-			bf := newBitfield(len(info.PieceHashes))
-			s.bitfield = bf
-			err = s.initFile()
-			if err != nil {
-				return
-			}
-			err = s.createCache()
-			if err != nil {
-				return
-			}
-			s.haveMetadata = true
-			s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
-			s.scheduleWork()
-			time.Sleep(1 * time.Second)
-			continue
+			s.getMetadata(conn)
 		}
 		if len(s.PiecesDone) == len(s.PieceHashes) {
 			s.removePeer(conn)
@@ -452,8 +458,7 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for len(s.ConnectedPeers.peers) < MaxConnections {
-		s.ConnectedPeers.mx.Lock()
+	for len(s.ConnectedPeers.peers) < MaxConnections && len(s.ConnectedPeers.peers) < len(s.Peers) {
 		for _, peer := range s.Peers {
 			if len(s.ConnectedPeers.peers) < MaxConnections {
 				if _, ok := s.ConnectedPeers.peers[peer.String()]; !ok {
@@ -461,7 +466,6 @@ func (s *Session) connectToPeers() {
 				}
 			}
 		}
-		s.ConnectedPeers.mx.Unlock()
 	}
 }
 
@@ -625,9 +629,9 @@ func (s *Session) scheduleWork() {
 			s.bitfield.SetPiece(index)
 		}
 	}
-	//rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
-	//	s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
-	//})
+	rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
+		s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
+	})
 	for _, piece := range s.PiecesNeeded {
 		s.workQueue <- piece
 	}
