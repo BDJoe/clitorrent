@@ -36,6 +36,15 @@ func formatRequest(index, begin, length int) *Message {
 	return &Message{ID: MsgRequest, Payload: payload}
 }
 
+// formatPiece creates a Request message
+func formatPiece(index, begin int, buf []byte) *Message {
+	payload := make([]byte, 8+len(buf))
+	binary.BigEndian.PutUint32(payload[0:4], uint32(index))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(begin))
+	copy(payload[8:], buf)
+	return &Message{ID: MsgPiece, Payload: payload}
+}
+
 // formatCancel creates a Cancel message
 func formatCancel(index, begin, length int) *Message {
 	payload := make([]byte, 12)
@@ -138,7 +147,7 @@ func readMessage(c *PeerConnection) (*Message, error) {
 	lengthBuf := make([]byte, 4)
 	_, err := io.ReadFull(c.Conn, lengthBuf)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to read message length: %v", err)
 	}
 	length := binary.BigEndian.Uint32(lengthBuf)
 
@@ -150,7 +159,7 @@ func readMessage(c *PeerConnection) (*Message, error) {
 	messageBuf := make([]byte, length)
 	_, err = io.ReadFull(c.Conn, messageBuf)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Failed to read message: %v", err)
 	}
 
 	m := Message{

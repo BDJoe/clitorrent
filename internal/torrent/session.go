@@ -2,15 +2,17 @@ package torrent
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
 	"gotorrent/internal/util"
 	"io"
+	"log"
 	"math"
-	"math/rand/v2"
+	rand2 "math/rand"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -31,28 +33,28 @@ const MaxActivePieces = 10
 type Session struct {
 	TrackerInfo
 	ConnectedPeers
-	Seeders           uint32
-	Leechers          uint32
-	PeerID            [20]byte
-	PieceHashes       [][20]byte
-	PieceLength       int
-	Length            int
-	Name              string
-	Files             []TorrentFile
-	Path              string
-	PiecesDone        []int
-	PiecesNeeded      []*pieceWork
-	Tui               *tea.Program
-	TorrentID         int
-	closeChan         chan struct{}
-	workQueue         chan *pieceWork
-	activePieces      chan *pieceWork
-	results           chan *pieceResult
-	bitfield          Bitfield
-	peerMessageChan   chan PeerMessage
-	addConnectionChan chan *PeerConnection
-	isMagnet          bool
-	haveMetadata      bool
+	Seeders            uint32
+	Leechers           uint32
+	PeerID             [20]byte
+	PieceHashes        [][20]byte
+	PieceLength        int
+	Length             int
+	Name               string
+	Files              []TorrentFile
+	Path               string
+	PiecesDone         map[int]*pieceResult
+	PiecesNeeded       []*pieceWork
+	Tui                *tea.Program
+	TorrentID          int
+	closeChan          chan struct{}
+	workQueue          chan *pieceWork
+	activePieces       chan *pieceWork
+	results            chan *pieceResult
+	bitfield           Bitfield
+	messageReceiveChan chan PeerMessage
+	addConnectionChan  chan *PeerConnection
+	isMagnet           bool
+	haveMetadata       bool
 }
 
 type ConnectedPeers struct {
@@ -79,8 +81,9 @@ type pieceProgress struct {
 	backlog    int
 }
 
-func newSessionFromFile(tf TorrentInfo) (*Session, error) {
-	peerID, err := generatePeerID()
+func newSession(tf TorrentInfo) (*Session, error) {
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +91,7 @@ func newSessionFromFile(tf TorrentInfo) (*Session, error) {
 	tracker := TrackerInfo{Announce: tf.Announce, AnnounceList: tf.AnnounceList, InfoHash: tf.InfoHash, Length: tf.Length}
 
 	bf := newBitfield(len(tf.PieceHashes))
+
 	session := Session{
 		TrackerInfo:  tracker,
 		PeerID:       peerID,
@@ -97,6 +101,7 @@ func newSessionFromFile(tf TorrentInfo) (*Session, error) {
 		Name:         tf.Name,
 		Files:        tf.Files,
 		bitfield:     bf,
+		PiecesDone:   make(map[int]*pieceResult),
 		closeChan:    make(chan struct{}),
 		isMagnet:     false,
 		haveMetadata: true,
@@ -105,7 +110,8 @@ func newSessionFromFile(tf TorrentInfo) (*Session, error) {
 }
 
 func newSessionFromMagnet(tf TorrentInfo) (*Session, error) {
-	peerID, err := generatePeerID()
+	var peerID [20]byte
+	_, err := rand.Read(peerID[:])
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +121,7 @@ func newSessionFromMagnet(tf TorrentInfo) (*Session, error) {
 		PeerID:       peerID,
 		closeChan:    make(chan struct{}),
 		Name:         tf.Name,
+		PiecesDone:   make(map[int]*pieceResult),
 		isMagnet:     true,
 		haveMetadata: false,
 	}
@@ -148,10 +155,7 @@ func attemptDownloadPiece(c *PeerConnection, pw *pieceWork) ([]byte, error) {
 					blockSize = pw.length - state.requested
 				}
 
-				err := c.SendRequest(pw.index, state.requested, blockSize)
-				if err != nil {
-					return nil, err
-				}
+				c.SendRequest(pw.index, state.requested, blockSize)
 				state.backlog++
 				state.requested += blockSize
 			}
@@ -186,67 +190,60 @@ func (s *Session) addConnection(conn *PeerConnection) {
 		select {
 		case s.addConnectionChan <- conn:
 		case <-s.closeChan:
+			conn.Conn.Close()
 		}
 	} else {
 		conn.Conn.Close()
 	}
 }
 
-func (s *Session) getMetadata(conn *PeerConnection) {
-	for {
-		if conn.SupportedExtensions == nil {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		metadata, err := conn.getMetadata()
-		if err != nil {
-			return
-		}
-		metadataHash := sha1.Sum(metadata)
-
-		if !bytes.Equal(metadataHash[:], s.InfoHash[:]) {
-			return
-		}
-
-		info, err := ParseTorrentMagnet(metadata)
-		if err != nil {
-			return
-		}
-		if s.haveMetadata {
-			return
-		}
-		s.PieceHashes = info.PieceHashes
-		s.PieceLength = info.PieceLength
-		s.Files = info.Files
-		s.Length = info.Length
-		bf := newBitfield(len(info.PieceHashes))
-		s.bitfield = bf
-		err = s.initFile()
-		if err != nil {
-			return
-		}
-		err = s.createCache()
-		if err != nil {
-			return
-		}
-		s.haveMetadata = true
-		s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
-		s.scheduleWork()
-		return
-	}
-}
-
 func (s *Session) handleDownload(conn *PeerConnection) {
 	for {
 		if !s.haveMetadata {
-			s.getMetadata(conn)
+			if conn.SupportedExtensions == nil {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+			metadata, err := conn.getMetadata()
+			if err != nil {
+				return
+			}
+			metadataHash := sha1.Sum(metadata)
+
+			if !bytes.Equal(metadataHash[:], s.InfoHash[:]) {
+				return
+			}
+
+			info, err := ParseTorrentMagnet(metadata)
+			if err != nil {
+				return
+			}
+			s.PieceHashes = info.PieceHashes
+			s.PieceLength = info.PieceLength
+			s.Files = info.Files
+			s.Length = info.Length
+			bf := newBitfield(len(info.PieceHashes))
+			s.bitfield = bf
+			err = s.initFile()
+			if err != nil {
+				return
+			}
+			err = s.createCache()
+			if err != nil {
+				return
+			}
+			s.haveMetadata = true
+			s.workQueue = make(chan *pieceWork, len(s.PieceHashes))
+			s.scheduleWork()
+			time.Sleep(1 * time.Second)
+			continue
 		}
 		if len(s.PiecesDone) == len(s.PieceHashes) {
-			s.removePeer(conn)
+			//s.removePeer(conn)
 			return
 		}
 		if conn.AmChoked {
-			time.Sleep(1 * time.Second)
+			time.Sleep(5 * time.Second)
 			continue
 		}
 		select {
@@ -317,25 +314,25 @@ func (s *Session) runConnection(conn *PeerConnection) {
 	s.ConnectedPeers.mx.Lock()
 	s.ConnectedPeers.peers[conn.Address.String()] = conn
 	s.ConnectedPeers.mx.Unlock()
-	go conn.peerListener(s.peerMessageChan)
+	go conn.peerListener(s.messageReceiveChan)
 	go s.handleDownload(conn)
 }
 
-func (s *Session) handleMessages(c *PeerConnection) {
-	for {
-		msg, err := c.Read()
-		if err != nil {
-			//if err.Error() != io.EOF.Error() {
-			//	s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
-			//}
-			continue
-		}
-		err = c.handleMessage(msg)
-		if err != nil {
-			continue
-		}
-	}
-}
+//func (s *Session) handleMessages(c *PeerConnection) {
+//	for {
+//		msg, err := c.Read()
+//		if err != nil {
+//			//if err.Error() != io.EOF.Error() {
+//			//	s.Tui.Send(util.ErrorMsg{TorrentId: s.TorrentID, Err: err.Error()})
+//			//}
+//			continue
+//		}
+//		err = c.handleMessage(msg)
+//		if err != nil {
+//			continue
+//		}
+//	}
+//}
 
 //func (s *Session) handleSeeding() {
 //	err := s.TrackerInfo.sendAnnounce(EventCompleted, s)
@@ -458,7 +455,8 @@ func (s *Session) StopDownload() {
 
 func (s *Session) connectToPeers() {
 	// Start workers
-	for len(s.ConnectedPeers.peers) < MaxConnections && len(s.ConnectedPeers.peers) < len(s.Peers) {
+	for {
+		//s.ConnectedPeers.mx.Lock()
 		for _, peer := range s.Peers {
 			if len(s.ConnectedPeers.peers) < MaxConnections {
 				if _, ok := s.ConnectedPeers.peers[peer.String()]; !ok {
@@ -466,13 +464,15 @@ func (s *Session) connectToPeers() {
 				}
 			}
 		}
+		time.Sleep(5 * time.Minute)
+		//s.ConnectedPeers.mx.Unlock()
 	}
 }
 
 func (s *Session) RunSession(program *tea.Program, id int) error {
 	// Init queues for workers to retrieve work and send results
 	s.ConnectedPeers.peers = make(map[string]*PeerConnection)
-	s.peerMessageChan = make(chan PeerMessage)
+	s.messageReceiveChan = make(chan PeerMessage)
 	s.addConnectionChan = make(chan *PeerConnection, MaxConnections)
 	s.activePieces = make(chan *pieceWork, MaxActivePieces)
 	s.results = make(chan *pieceResult)
@@ -512,13 +512,14 @@ outer:
 			}
 			s.activePieces <- piece
 
-		case msg := <-s.peerMessageChan:
+		case msg := <-s.messageReceiveChan:
 			var err error
-			if !s.haveMetadata {
-				err = msg.peer.HandleExtension(msg.message)
-			} else {
-				err = s.handleMessage(msg.message, msg.peer)
-			}
+			//if !s.haveMetadata {
+			//	err = msg.peer.HandleExtension(msg.message)
+			//} else {
+			//	err = s.handleMessage(msg.message, msg.peer)
+			//}
+			err = s.handleMessage(msg.message, msg.peer)
 			if err != nil {
 				break
 			}
@@ -527,7 +528,7 @@ outer:
 			begin, _ := s.calculateBoundsForPiece(res.index)
 			s.saveFile(res.buf, begin)
 			//donePieces++
-			s.PiecesDone = append(s.PiecesDone, res.index)
+			s.PiecesDone[res.index] = res
 			//err := t.saveCache()
 			//if err != nil {
 			//	program.Send(util.ErrorMsg{TorrentId: id, Err: err.Error()})
@@ -552,18 +553,27 @@ outer:
 	return nil
 }
 
-func (s *Session) requestPiece(c *PeerConnection) {
-	for piece := range s.activePieces {
-		if c.PeerBitfield.HasPiece(piece.index) {
-			attemptDownloadPiece(c, piece)
-		}
-	}
-}
+//func (s *Session) requestPiece(c *PeerConnection) {
+//	for piece := range s.activePieces {
+//		if c.PeerBitfield.HasPiece(piece.index) {
+//			attemptDownloadPiece(c, piece)
+//		}
+//	}
+//}
 
 func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
 	if msg == nil { // keep-alive
 		return nil
 	}
+
+	logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("Failed to open log file: %v", err)
+	}
+	defer logFile.Close()
+
+	log.SetOutput(logFile)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	switch msg.ID {
 	case MsgChoke:
@@ -571,29 +581,33 @@ func (s *Session) handleMessage(msg *Message, c *PeerConnection) error {
 	case MsgUnchoke:
 		c.AmChoked = false
 	case MsgInterested:
-		fmt.Println(msg.String())
+		log.Println("RECEIVED: Message Type: ", msg.ID, "Peer :", c.Address)
 		c.PeerInterested = true
+		c.PeerChoked = false
 		c.SendUnchoke()
 	case MsgNotInterested:
 		c.PeerInterested = false
+		c.PeerChoked = true
 	case MsgHave:
 		index, err := parseHave(msg)
 		if err != nil {
 			return err
 		}
 		c.PeerBitfield.SetPiece(index)
+		s.setInterested(c)
 	case MsgBitfield:
 		c.PeerBitfield = msg.Payload
 		if !s.setInterested(c) {
-			s.removePeer(c)
+			c.SendNotInterested()
 		}
 
 	case MsgRequest:
-		fmt.Println(msg.String())
-		err := c.HandleRequest(msg)
+		log.Println("RECEIVED: Message Type: ", msg.ID, "Peer :", c.Address)
+		pieceMsg, err := s.formatPieceMessage(msg)
 		if err != nil {
 			return err
 		}
+		c.SendPiece(pieceMsg)
 	case MsgExtended:
 		c.processExtension(msg.Payload)
 	case MsgPiece:
@@ -620,16 +634,41 @@ func (s *Session) setInterested(c *PeerConnection) bool {
 	return false
 }
 
+func (s *Session) formatPieceMessage(msg *Message) (*Message, error) {
+	index, begin, length, err := parseRequest(msg)
+	if err != nil {
+		return nil, err
+	}
+	parsedIndex := int(binary.BigEndian.Uint32(msg.Payload[0:4]))
+	if parsedIndex != index {
+		return nil, fmt.Errorf("Expected index %d, got %d", index, parsedIndex)
+	}
+	if piece, ok := s.PiecesDone[index]; ok {
+		if begin >= len(piece.buf) {
+			return nil, fmt.Errorf("Begin offset too high. %d >= %d", begin, len(piece.buf))
+		}
+		data := piece.buf[begin : begin+length]
+		if begin+len(data) > len(piece.buf) {
+			return nil, fmt.Errorf("Data too long [%d] for offset %d with length %d", len(data), begin, len(piece.buf))
+		}
+		buf := make([]byte, length)
+		copy(buf, data)
+		pieceMsg := formatPiece(piece.index, begin, buf)
+		return pieceMsg, nil
+	}
+	return nil, fmt.Errorf("Piece not found for message ID %d", msg.ID)
+}
+
 func (s *Session) scheduleWork() {
 	for index, hash := range s.PieceHashes {
-		if !slices.Contains(s.PiecesDone, index) {
+		if _, ok := s.PiecesDone[index]; !ok {
 			length := s.calculatePieceSize(index)
 			s.PiecesNeeded = append(s.PiecesNeeded, &pieceWork{index: index, length: length, hash: hash})
 		} else {
 			s.bitfield.SetPiece(index)
 		}
 	}
-	rand.Shuffle(len(s.PiecesNeeded), func(i, j int) {
+	rand2.Shuffle(len(s.PiecesNeeded), func(i, j int) {
 		s.PiecesNeeded[i], s.PiecesNeeded[j] = s.PiecesNeeded[j], s.PiecesNeeded[i]
 	})
 	for _, piece := range s.PiecesNeeded {
@@ -653,7 +692,10 @@ func (s *Session) getCache(buf []byte) error {
 			if !bytes.Equal(bufHash[:], hash[:]) {
 				continue
 			}
-			s.PiecesDone = append(s.PiecesDone, index)
+			s.PiecesDone[index] = &pieceResult{
+				index: index,
+				buf:   buf[begin:end],
+			}
 			s.bitfield.SetPiece(index)
 		}
 	}
@@ -714,6 +756,9 @@ func (s *Session) initMultiFile() ([]byte, error) {
 		for _, torrentFile = range s.Files {
 			filePath := filepath.Join(torrentFile.Path...)
 			d, f := filepath.Split(filePath)
+			if !util.Exists(filepath.Join(basePath, d)) {
+				util.MakeDir(filepath.Join(basePath, d))
+			}
 			fullPath := filepath.Join(basePath, d, f)
 			file, err := os.Create(fullPath)
 			if err != nil {

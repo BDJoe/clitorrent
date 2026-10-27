@@ -21,7 +21,6 @@ type bencodeCache struct {
 	Name        string              `bencode:"name"`
 	Files       []bencodeFile       `bencode:"files"`
 	Path        string              `bencode:"path"`
-	PiecesDone  []int               `bencode:"pieces-done"`
 }
 
 type bencodeTrackerCache struct {
@@ -183,7 +182,6 @@ func createCacheFile(file *os.File, session *Session) error {
 		Name:        session.Name,
 		Files:       files,
 		Path:        session.Path,
-		PiecesDone:  session.PiecesDone,
 	}
 	err := bencode.Marshal(file, cacheFile)
 	if err != nil {
@@ -204,7 +202,7 @@ func parseCacheFile(data []byte) (*Session, error) {
 		files = append(files, TorrentFile{Length: file.Length, Path: file.Path})
 	}
 	tracker := TrackerInfo{Announce: cacheFile.TrackerInfo.Announce, AnnounceList: cacheFile.TrackerInfo.AnnounceList, InfoHash: cacheFile.TrackerInfo.InfoHash, Length: cacheFile.TrackerInfo.Length}
-
+	bf := newBitfield(len(cacheFile.PieceHashes))
 	session := Session{
 		TrackerInfo:  tracker,
 		closeChan:    make(chan struct{}),
@@ -215,9 +213,9 @@ func parseCacheFile(data []byte) (*Session, error) {
 		PieceLength:  cacheFile.PieceLength,
 		Length:       cacheFile.Length,
 		Name:         cacheFile.Name,
+		bitfield:     bf,
 		Files:        files,
 		Path:         cacheFile.Path,
-		PiecesDone:   cacheFile.PiecesDone,
 		isMagnet:     false,
 		haveMetadata: true,
 	}

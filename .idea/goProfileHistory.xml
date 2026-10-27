@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GoProfileHistory">
+    <profile entry="$USER_HOME$/GoLandProfiles/go_build_gotorrent-goroutine-2026-10-27-111552-104.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1793114138430" />
+        <option name="file" value="go_build_gotorrent-goroutine-2026-10-27-111552-104.pprof" />
+        <option name="ours" value="true" />
+        <option name="profileType" value="GOROUTINE" />
+      </GoProfileMapEntry>
+    </profile>
+    <profile entry="$USER_HOME$/GoLandProfiles/go_build_gotorrent-goroutine-2026-10-27-111651-287.pprof">
+      <GoProfileMapEntry>
+        <option name="buildAnchorMillis" value="1793114138430" />
+        <option name="file" value="go_build_gotorrent-goroutine-2026-10-27-111651-287.pprof" />
+        <option name="ours" value="true" />
+        <option name="profileType" value="GOROUTINE" />
+      </GoProfileMapEntry>
+    </profile>
+  </component>
+</project>

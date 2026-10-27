@@ -128,6 +128,7 @@ func GetCachedTorrents() ([]*Session, error) {
 
 func InitCachedSession(session *Session) {
 	session.Tui.Send(util.StatusMsg{TorrentId: session.TorrentID, Status: "Initializing Torrent"})
+	session.PiecesDone = make(map[int]*pieceResult)
 	err := session.initFile()
 	if err != nil {
 		return

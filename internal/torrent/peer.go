@@ -10,8 +10,9 @@ import (
 
 // Peer encodes connection information for a peer
 type Peer struct {
-	IP   net.IP
-	Port uint16
+	IP                 net.IP
+	Port               uint16
+	ConnectionAttempts int
 }
 
 // unmarshalPeers parses peer IP addresses and ports from a buffer
